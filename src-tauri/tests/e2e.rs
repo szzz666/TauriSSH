@@ -14,12 +14,19 @@ use russh::Disconnect;
 use russh_sftp::client::SftpSession;
 use taurissh_lib::harness::{self, TestProfile};
 
+/// 优先使用私钥（TEST_SSH_KEY），否则退回密码（TEST_SSH_PASSWORD）；两者都未提供时跳��。
 fn profile() -> Option<TestProfile> {
-    let key = std::env::var("TEST_SSH_KEY").ok()?;
-    let path = PathBuf::from(key);
-    if !path.exists() {
+    let password = std::env::var("TEST_SSH_PASSWORD").ok().filter(|v| !v.is_empty());
+    let private_key = std::env::var("TEST_SSH_KEY")
+        .ok()
+        .filter(|path| PathBuf::from(path).exists())
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .unwrap_or_default();
+
+    if private_key.is_empty() && password.is_none() {
         return None;
     }
+
     Some(TestProfile {
         host: std::env::var("TEST_SSH_HOST").unwrap_or_else(|_| "127.0.0.1".into()),
         port: std::env::var("TEST_SSH_PORT")
@@ -27,9 +34,10 @@ fn profile() -> Option<TestProfile> {
             .and_then(|v| v.parse().ok())
             .unwrap_or(2222),
         username: std::env::var("TEST_SSH_USER").unwrap_or_else(|_| "mac".into()),
-        private_key: std::fs::read_to_string(path).unwrap(),
+        private_key,
         passphrase: std::env::var("TEST_SSH_PASSPHRASE").ok(),
-        password: std::env::var("TEST_SSH_PASSWORD").ok(),
+        password,
+        use_password: std::env::var("TEST_SSH_KEY").is_err() || std::env::var("TEST_SSH_PASSWORD").is_ok(),
     })
 }
 
@@ -60,9 +68,10 @@ async fn ssh_connect_and_fingerprint() {
 #[tokio::test]
 async fn ssh_wrong_password_is_rejected_or_fails_cleanly() {
     let mut p = require_profile!();
-    p.password = Some("definitely-wrong".into());
+    p.password = Some("definitely-wrong-password".into());
     p.private_key = String::new();
     p.passphrase = None;
+    p.use_password = true;
     let result = harness::connect_password(&p).await;
     assert!(result.is_err(), "错误密码不应连接成功");
 }
@@ -206,4 +215,12 @@ impl russh::client::Handler for AcceptAny {
     ) -> Result<bool, Self::Error> {
         Ok(true)
     }
+}
+
+#[tokio::test]
+async fn terminal_open_sends_initial_output() {
+    let p = require_profile!();
+    let (handle, _) = harness::connect(&p).await.expect("连接失败");
+    let output = harness::run_shell_command(&handle, "echo FIRST_FRAME_OK; sleep 0.3; exit\n").await;
+    assert!(output.contains("FIRST_FRAME_OK"), "PTY 首帧应包含命令输出，实际: {output:?}");
 }

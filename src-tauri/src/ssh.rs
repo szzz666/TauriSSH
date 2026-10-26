@@ -210,7 +210,8 @@ pub async fn open_terminal(
     }
 
     let (tx, mut rx) = mpsc::unbounded_channel::<TerminalCommand>();
-    let event_channel = format!("terminal://{}", term_id);
+    // Tauri 事件名只允许字母数字与 -/:_，其余字符统一替换，避免监听失效
+    let event_channel = format!("terminal-{}", sanitize_event_name(&term_id));
     let app_handle = app.clone();
     let term_for_task = term_id.clone();
 
@@ -283,6 +284,13 @@ pub struct TerminalEvent {
     pub kind: &'static str,
     pub data: Option<String>,
     pub code: Option<String>,
+}
+
+/// Tauri 事件名安全化：仅保留字母数字与 -/:_。
+pub fn sanitize_event_name(raw: &str) -> String {
+    raw.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | ':' | '_') { c } else { '_' })
+        .collect()
 }
 
 pub fn base64_encode(data: &[u8]) -> String {

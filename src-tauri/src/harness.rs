@@ -16,6 +16,8 @@ pub struct TestProfile {
     pub private_key: String,
     pub passphrase: Option<String>,
     pub password: Option<String>,
+    /// true 时使用密码认证，否则使用私钥。
+    pub use_password: bool,
 }
 
 pub struct AcceptAll;
@@ -71,7 +73,7 @@ async fn connect_with(profile: &TestProfile, use_key: bool) -> AppResult<(Arc<Ha
 }
 
 pub async fn connect(profile: &TestProfile) -> AppResult<(Arc<Handle<AcceptAll>>, Fingerprint)> {
-    connect_with(profile, true).await
+    connect_with(profile, !profile.use_password).await
 }
 
 pub async fn connect_password(profile: &TestProfile) -> AppResult<(Arc<Handle<AcceptAll>>, Fingerprint)> {

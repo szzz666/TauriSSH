@@ -72,6 +72,18 @@ export default function ConnectionModal({ open, editing, onClose, onConnected }:
     }
   }, [open, initialValues, form]);
 
+  // Android 返回键：先关指纹确认，再关表单
+  useEffect(() => {
+    const handler = (event: Event) => {
+      if (!open) return;
+      event.preventDefault();
+      if (fingerprint) setFingerprint(null);
+      else onClose();
+    };
+    window.addEventListener("taurissh-back", handler);
+    return () => window.removeEventListener("taurissh-back", handler);
+  }, [fingerprint, onClose, open]);
+
   const persist = (values: FormValues, connectedLabel: string) => {
     if (values.save === false) return;
     const profile = toProfile(values);

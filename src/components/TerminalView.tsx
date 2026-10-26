@@ -27,6 +27,11 @@ interface TerminalViewProps {
   readOnly?: boolean;
 }
 
+/** 与 Rust 侧 sanitize_event_name 保持一致：Tauri 事件名只允许字母数字与 -/:_。 */
+export function sanitizeEventName(raw: string): string {
+  return raw.replace(/[^A-Za-z0-9\-/:\_]/g, "_");
+}
+
 function decodeBase64(data: string): Uint8Array {
   const binary = atob(data);
   const bytes = new Uint8Array(binary.length);
@@ -100,18 +105,9 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(function Term
     let resizeObserver: ResizeObserver | undefined;
 
     const bootstrap = async () => {
-      try {
-        if (screenName) await terminalApi.attachScreen(connectionId, termId, screenName);
-        else await terminalApi.open(connectionId, termId, undefined, term.cols, term.rows);
-        onReady?.();
-      } catch (error) {
-        onError?.((error as Error).message);
-        term.writeln(`\r\n\x1b[31m连接失败：${(error as Error).message}\x1b[0m`);
-        return;
-      }
-
+      // 必须先注册监听再打开终端，否则会丢掉 shell 提示符等首批输出
       unlisten = await listen<{ kind: string; data?: string | null; code?: string | null }>(
-        `terminal://${termId}`,
+        `terminal-${sanitizeEventName(termId)}`,
         (event) => {
           const payload = event.payload;
           if (payload.kind === "output" && payload.data) {
@@ -123,6 +119,21 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(function Term
           }
         },
       );
+
+      try {
+        const opening = screenName
+          ? terminalApi.attachScreen(connectionId, termId, screenName)
+          : terminalApi.open(connectionId, termId, undefined, term.cols, term.rows);
+        const timeout = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("打开终端超时（10 秒）")), 10_000),
+        );
+        await Promise.race([opening, timeout]);
+        onReady?.();
+      } catch (error) {
+        onError?.((error as Error).message);
+        term.writeln(`\r\n\x1b[31m连接失败：${(error as Error).message}\x1b[0m`);
+        return;
+      }
 
       try {
         fit.fit();

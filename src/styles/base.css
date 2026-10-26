@@ -31,6 +31,17 @@ body,
   margin: 0;
 }
 
+/* antd 的 App 包裹层默认没有高度，会让 flex 布局塌陷 */
+#root > .ant-app {
+  height: 100%;
+  min-height: 0;
+}
+
+#root > .ant-app > .os-shell,
+#root > .ant-app > .app-shell {
+  height: 100%;
+}
+
 body {
   background: var(--app-bg);
   color: var(--app-text);
@@ -153,5 +164,538 @@ body {
   }
   .app-brand span.brand-text {
     font-size: 14px;
+  }
+}
+/* ============ 桌面 / 手机主屏 ============ */
+.os-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.os-wallpaper {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(1200px 680px at 12% 8%, rgba(37, 99, 235, 0.55), transparent 62%),
+    radial-gradient(940px 620px at 88% 14%, rgba(14, 165, 233, 0.42), transparent 60%),
+    radial-gradient(900px 700px at 70% 92%, rgba(124, 58, 237, 0.4), transparent 62%),
+    linear-gradient(150deg, #0b1220 0%, #111c33 48%, #0a1730 100%);
+}
+
+html[data-theme="light"] .os-wallpaper {
+  background:
+    radial-gradient(1200px 680px at 12% 8%, rgba(59, 130, 246, 0.34), transparent 62%),
+    radial-gradient(940px 620px at 88% 14%, rgba(56, 189, 248, 0.3), transparent 60%),
+    radial-gradient(900px 700px at 70% 92%, rgba(168, 85, 247, 0.26), transparent 62%),
+    linear-gradient(150deg, #e2ecff 0%, #f3f7ff 50%, #e8f0ff 100%);
+}
+
+.os-topbar {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 46px;
+  padding: 0 14px;
+  color: #f8fafc;
+  background: rgba(9, 14, 26, 0.42);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  backdrop-filter: blur(18px);
+  padding-top: env(safe-area-inset-top);
+  box-sizing: content-box;
+}
+
+html[data-theme="light"] .os-topbar {
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.os-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.os-brand-badge {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #2563eb, #38bdf8);
+  font-weight: 700;
+  color: #fff;
+}
+
+.os-brand strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.os-brand small {
+  display: block;
+  font-size: 11px;
+  opacity: 0.72;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 42vw;
+}
+
+.os-topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.os-topbar-status :where(.ant-badge-status-text) {
+  color: inherit;
+  opacity: 0.86;
+}
+
+.os-clock {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+
+.os-desktop {
+  position: relative;
+  z-index: 10;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.os-icons {
+  position: absolute;
+  inset: 14px auto auto 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 88px);
+  grid-auto-rows: 92px;
+  gap: 6px;
+  z-index: 1;
+}
+
+.os-icons.is-mobile {
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+  gap: 14px 8px;
+  padding: 14px 10px 20px;
+}
+
+.os-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 2px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: #f1f5f9;
+  cursor: pointer;
+  transition: background 0.16s ease, transform 0.16s ease;
+}
+
+html[data-theme="light"] .os-icon {
+  color: #0f172a;
+}
+
+.os-icon:hover,
+.os-icon:focus-visible {
+  background: rgba(148, 163, 184, 0.18);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.os-icon-tile {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  font-size: 21px;
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(2, 6, 23, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.os-icons.is-mobile .os-icon-tile {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  font-size: 24px;
+}
+
+.os-icon-label {
+  font-size: 11.5px;
+  line-height: 1.25;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(2, 6, 23, 0.45);
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-theme="light"] .os-icon-label {
+  text-shadow: none;
+}
+
+/* 窗口 */
+.os-window {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  min-height: 220px;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--app-panel);
+  border: 1px solid var(--app-border);
+  box-shadow: 0 24px 60px rgba(2, 6, 23, 0.4);
+  animation: os-window-in 0.18s ease;
+}
+
+html[data-theme="light"] .os-window {
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2);
+}
+
+.os-window.is-active {
+  box-shadow: 0 28px 70px rgba(2, 6, 23, 0.5), 0 0 0 1px rgba(59, 130, 246, 0.55);
+}
+
+@keyframes os-window-in {
+  from { opacity: 0; transform: scale(0.97) translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.os-window-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 6px 0 12px;
+  background: var(--app-titlebar);
+  border-bottom: 1px solid var(--app-border);
+  cursor: grab;
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.os-window-bar:active {
+  cursor: grabbing;
+}
+
+.os-window-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.os-window-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.os-window-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.os-window-title small {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--app-muted);
+  white-space: nowrap;
+}
+
+.os-window-toolbar {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.os-window-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.os-window-body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  color: var(--app-text);
+}
+
+.os-window-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--app-border) 50%);
+}
+
+/* 终端窗口内不滚动 */
+.os-terminal {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 8px;
+}
+
+.os-terminal-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.os-terminal-host {
+  flex: 1;
+  min-height: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--term-bg);
+  padding: 6px;
+}
+
+/* 任务栏 */
+.os-taskbar {
+  position: relative;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 60px;
+  padding: 0 12px;
+  background: rgba(9, 14, 26, 0.55);
+  border-top: 1px solid rgba(148, 163, 184, 0.22);
+  backdrop-filter: blur(20px);
+  padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: content-box;
+  flex: 0 0 auto;
+}
+
+html[data-theme="light"] .os-taskbar {
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.os-tasks {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.os-tasks::-webkit-scrollbar {
+  display: none;
+}
+
+.os-task {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 220px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: rgba(148, 163, 184, 0.14);
+  color: #e2e8f0;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease;
+  flex: 0 0 auto;
+}
+
+html[data-theme="light"] .os-task {
+  color: #0f172a;
+  background: rgba(100, 116, 139, 0.14);
+}
+
+.os-task:hover {
+  background: rgba(148, 163, 184, 0.26);
+}
+
+.os-task.is-active {
+  border-color: rgba(59, 130, 246, 0.7);
+  background: rgba(37, 99, 235, 0.28);
+}
+
+.os-task.is-min {
+  opacity: 0.66;
+}
+
+.os-task-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.os-task-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.os-dock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.os-dock-item {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.16s ease;
+}
+
+.os-dock-item:hover {
+  transform: translateY(-3px);
+}
+
+/* 开始菜单 */
+.os-start {
+  position: absolute;
+  z-index: 50;
+  left: 12px;
+  bottom: calc(72px + env(safe-area-inset-bottom));
+  width: min(420px, calc(100vw - 24px));
+  padding: 14px;
+  border-radius: 18px;
+  background: var(--app-panel);
+  border: 1px solid var(--app-border);
+  box-shadow: 0 28px 70px rgba(2, 6, 23, 0.5);
+  animation: os-window-in 0.16s ease;
+}
+
+.os-start-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.os-start-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.os-start-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--app-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.os-start-item:hover {
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.os-start-footer {
+  display: grid;
+  gap: 6px;
+}
+
+/* 移动端：手机主屏形态 */
+.os-shell.is-mobile .os-topbar {
+  height: 40px;
+}
+
+.os-shell.is-mobile .os-desktop {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.os-shell.is-mobile .os-topbar,
+.os-shell.is-mobile .os-taskbar {
+  width: 100%;
+  flex: 0 0 auto;
+}
+
+.os-shell.is-mobile .os-window {
+  border-radius: 20px;
+  left: 8px !important;
+  top: 8px !important;
+  width: calc(100% - 16px) !important;
+  height: calc(100% - 16px) !important;
+}
+
+.os-shell.is-mobile .os-window-resize {
+  display: none;
+}
+
+.os-shell.is-mobile .os-window-body {
+  padding: 10px;
+}
+
+.os-shell.is-mobile .os-taskbar {
+  height: 64px;
+  gap: 6px;
+  padding: 0 8px;
+  overflow-x: auto;
+}
+
+.os-shell.is-mobile .os-dock {
+  display: none;
+}
+
+.os-shell.is-mobile .os-task {
+  max-width: 150px;
+  padding: 6px 10px;
+}
+
+.os-shell.is-mobile .os-start {
+  left: 8px;
+  right: 8px;
+  width: auto;
+  bottom: calc(80px + env(safe-area-inset-bottom));
+}
+
+@media (max-width: 767px) {
+  .os-window-title small {
+    display: none;
   }
 }
