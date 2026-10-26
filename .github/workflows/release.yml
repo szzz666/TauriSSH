@@ -125,7 +125,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libfuse2
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -191,7 +191,14 @@ jobs:
       - name: 安装前端依赖
         run: npm ci
       - name: 初始化 Android 工程
-        run: npx tauri android init --ci
+        env:
+          CI: "true"
+        run: |
+          if [ ! -d src-tauri/gen/android ]; then
+            npx tauri android init --ci
+          else
+            echo "已存在 Android 工程，跳过初始化"
+          fi
       - name: 构建 APK（arm64 + armv7）
         env:
           NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
@@ -259,12 +266,48 @@ jobs:
           key: ios
       - name: 安装前端依赖
         run: npm ci
-      - name: 初始化 iOS 工程
-        run: npx tauri ios init --ci
-      - name: 构建未签名 .app
+      - name: 配置 iOS 开发团队
+        shell: bash
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
         run: |
-          npx tauri ios build --target aarch64 --no-sign --ci
+          set -euo pipefail
+          if [ -z "${APPLE_DEVELOPMENT_TEAM:-}" ]; then
+            echo "::warning::未提供 APPLE_DEVELOPMENT_TEAM，iOS 将尝试无签名构建"
+            exit 0
+          fi
+          node -e "
+            const fs = require('fs');
+            const file = 'src-tauri/tauri.conf.json';
+            const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+            data.bundle = data.bundle || {};
+            data.bundle.iOS = { ...(data.bundle.iOS || {}), developmentTeam: process.env.APPLE_DEVELOPMENT_TEAM };
+            fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
+          "
+      - name: 初始化 iOS 工程
+        env:
+          CI: "true"
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+        run: |
+          if [ ! -d src-tauri/gen/apple ]; then
+            npx tauri ios init --ci || {
+              echo "::warning::iOS 工程初始化失败（需要 Apple 开发者团队），跳过 iOS 构建"
+              echo "IOS_BUILD_FAILED=1" >> "$GITHUB_ENV"
+            }
+          else
+            echo "已存在 iOS 工程，跳过初始化"
+          fi
+      - name: 构建 .app
+        if: env.IOS_BUILD_FAILED != '1'
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+        run: |
+          npx tauri ios build --target aarch64 --ci --no-sign || {
+            echo "::warning::iOS 构建失败（需要 Apple 开发者证书或描述文件），跳过产物上传"
+            echo "IOS_BUILD_FAILED=1" >> "$GITHUB_ENV"
+          }
       - name: 打包未签名 IPA
+        if: env.IOS_BUILD_FAILED != '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -278,6 +321,7 @@ jobs:
           rm -rf artifacts/Payload
           ls -la artifacts
       - name: 上传 iOS 产物到 Release
+        if: env.IOS_BUILD_FAILED != '1'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
