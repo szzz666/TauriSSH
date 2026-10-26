@@ -1,0 +1,305 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "发布版本号（例如 0.1.0），留空则使用 tauri.conf.json 中的版本"
+        required: false
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: "22"
+  RUST_VERSION: "stable"
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: 创建 Release 草稿
+    runs-on: ubuntu-22.04
+    outputs:
+      release_id: ${{ steps.create.outputs.release_id }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 解析版本号
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="${{ inputs.version }}"
+          if [ -n "$input" ]; then
+            version="${input#v}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "发布版本：$version"
+      - name: 写入版本号
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          node -e "
+            const fs = require('fs');
+            for (const file of ['package.json', 'src-tauri/tauri.conf.json']) {
+              const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+              data.version = process.env.VERSION;
+              fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\\n');
+            }
+          " 
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+      - name: 创建 GitHub Release
+        id: create
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          release_id="$(gh api repos/${{ github.repository }}/releases \
+            --method POST \
+            --field tag_name="v$version" \
+            --field name="TauriSSH v$version" \
+            --field draft=true \
+            --field prerelease=false \
+            --field generate_release_notes=true \
+            --jq '.id')"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+          echo "已创建 Release ID：$release_id"
+
+  build-desktop:
+    name: 构建桌面端 (${{ matrix.name }})
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS-Apple-Silicon
+            platform: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: macOS-Intel
+            platform: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - name: Windows-x64
+            platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - name: Linux-x64
+            platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 同步版本号
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            for (const file of ['package.json', 'src-tauri/tauri.conf.json']) {
+              const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+              data.version = process.env.VERSION;
+              fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\\n');
+            }
+          "
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+      - name: 安装 Linux 系统依赖
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
+      - name: 安装前端依赖
+        run: npm ci
+      - name: 构建并上传到 Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+  build-android:
+    name: 构建 Android
+    needs: create-release
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: 同步版本号
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            for (const file of ['package.json', 'src-tauri/tauri.conf.json']) {
+              const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+              data.version = process.env.VERSION;
+              fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\\n');
+            }
+          "
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: 安装 Android SDK 与 NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-34 build-tools;34.0.0 ndk;26.1.10909125"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: android
+      - name: 安装前端依赖
+        run: npm ci
+      - name: 初始化 Android 工程
+        run: npx tauri android init --ci
+      - name: 构建 APK（arm64 + armv7）
+        env:
+          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+        run: |
+          npx tauri android build --apk --target aarch64 armv7
+      - name: 构建 AAB（Play 商店）
+        env:
+          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+        run: |
+          npx tauri android build --aab --target aarch64 armv7
+      - name: 收集构建产物
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.create-release.outputs.version }}"
+          mkdir -p artifacts
+          find src-tauri/gen/android/app/build/outputs -type f \( -name "*.apk" -o -name "*.aab" \) | while read -r file; do
+            base="$(basename "$file")"
+            cp "$file" "artifacts/TauriSSH-${version}-${base}"
+          done
+          ls -la artifacts
+      - name: 上传 APK/AAB 到 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="v${{ needs.create-release.outputs.version }}"
+          for file in artifacts/*; do
+            gh release upload "$tag" "$file" --repo "${{ github.repository }}" --clobber
+          done
+
+  build-ios:
+    name: 构建 iOS
+    needs: create-release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 同步版本号
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            for (const file of ['package.json', 'src-tauri/tauri.conf.json']) {
+              const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+              data.version = process.env.VERSION;
+              fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\\n');
+            }
+          "
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ios
+      - name: 安装前端依赖
+        run: npm ci
+      - name: 初始化 iOS 工程
+        run: npx tauri ios init --ci
+      - name: 构建未签名 .app
+        run: |
+          npx tauri ios build --target aarch64 --no-sign --ci
+      - name: 打包未签名 IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.create-release.outputs.version }}"
+          mkdir -p artifacts
+          app_path="$(find src-tauri/gen/apple/build -name "*.app" -maxdepth 4 | head -n 1)"
+          echo "APP=$app_path"
+          mkdir -p "artifacts/Payload"
+          cp -R "$app_path" "artifacts/Payload/"
+          (cd artifacts && zip -qry "TauriSSH-${version}-ios-unsigned.ipa" Payload)
+          rm -rf artifacts/Payload
+          ls -la artifacts
+      - name: 上传 iOS 产物到 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="v${{ needs.create-release.outputs.version }}"
+          for file in artifacts/*; do
+            gh release upload "$tag" "$file" --repo "${{ github.repository }}" --clobber
+          done
+
+  publish-release:
+    name: 发布 Release
+    needs: [create-release, build-desktop, build-android, build-ios]
+    if: always() && needs.create-release.result == 'success'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 结束草稿状态
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.create-release.outputs.version }}"
+          gh api "repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }}" \
+            --method PATCH --field draft=false --field tag_name="v$version"
+          echo "Release v$version 已发布：${{ github.server_url }}/${{ github.repository }}/releases/tag/v$version"
