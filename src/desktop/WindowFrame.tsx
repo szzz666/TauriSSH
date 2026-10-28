@@ -33,7 +33,6 @@ interface Props {
 
 const MIN_WIDTH = 420;
 const MIN_HEIGHT = 280;
-const TASKBAR_SPACE = 76;
 
 /** 可拖拽 / 可缩放的窗口外壳，行为对齐桌面操作系统的窗口管理器。 */
 export default function WindowFrame({
@@ -48,7 +47,7 @@ export default function WindowFrame({
     [bounds.width],
   );
   const clampY = useCallback(
-    (value: number) => Math.min(Math.max(0, value), Math.max(0, bounds.height - TASKBAR_SPACE - 40)),
+    (value: number) => Math.min(Math.max(0, value), Math.max(0, bounds.height - 40)),
     [bounds.height],
   );
 
@@ -63,8 +62,8 @@ export default function WindowFrame({
         const dx = event.clientX - resizeRef.current.pointerX;
         const dy = event.clientY - resizeRef.current.pointerY;
         onResize(
-          Math.max(MIN_WIDTH, resizeRef.current.startW + dx),
-          Math.max(MIN_HEIGHT, resizeRef.current.startH + dy),
+          Math.min(bounds.width, Math.max(MIN_WIDTH, resizeRef.current.startW + dx)),
+          Math.min(bounds.height, Math.max(MIN_HEIGHT, resizeRef.current.startH + dy)),
         );
       }
     };
@@ -85,7 +84,7 @@ export default function WindowFrame({
   }, [clampX, clampY, onMove, onResize, win.maximized]);
 
   const style = win.maximized
-    ? { left: 0, top: 0, width: "100%", height: `calc(100% - ${TASKBAR_SPACE}px)`, zIndex: win.z }
+    ? { left: 0, top: 0, width: "100%", height: "100%", zIndex: win.z }
     : {
         left: win.x,
         top: win.y,

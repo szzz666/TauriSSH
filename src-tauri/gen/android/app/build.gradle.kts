@@ -14,14 +14,28 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// 发布签名：CI 通过环境变量注入密钥库，本地未配置时保持未签名
+val keystorePath: String? = System.getenv("ANDROID_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
+
 android {
-    compileSdk = 37
+    compileSdk = 36
+    ndkVersion = "27.2.12479018"
     namespace = "com.szzz666.taurissh"
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.szzz666.taurissh"
         minSdk = 24
-        targetSdk = 37
+        targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
@@ -39,6 +53,9 @@ android {
             }
         }
         getByName("release") {
+            if (keystorePath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                enable = true
             }

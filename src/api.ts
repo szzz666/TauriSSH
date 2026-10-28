@@ -61,6 +61,12 @@ export interface RemoteFile {
   owner: string;
   group: string;
   modified: number;
+  /** 桌面快捷方式指向的真实路径。 */
+  target?: string;
+  /** 快捷方式目标类型。 */
+  targetType?: "file" | "directory";
+  /** 快捷方式链接文件自身的路径。 */
+  shortcutPath?: string;
 }
 
 export interface ScreenSession {
@@ -165,4 +171,173 @@ export const tools = {
 
 export const jobs = {
   get: (jobId: string) => call<FileJob>("file_job", { jobId }),
+};
+
+/* ============================ 服务器运维 ============================ */
+
+export interface FirewallRule {
+  to: string;
+  action: string;
+  from: string;
+  v6: boolean;
+}
+
+export interface FirewallStatus {
+  backend: string;
+  installed: boolean;
+  active: boolean;
+  defaultIncoming: string;
+  defaultOutgoing: string;
+  defaultRouted: string;
+  rules: FirewallRule[];
+  ports: string[];
+  services: string[];
+  zone: string;
+  raw: string;
+  canWrite: boolean;
+}
+
+export interface MirrorPreset {
+  id: string;
+  name: string;
+  baseUrl: string;
+  active: boolean;
+}
+
+export interface MirrorStatus {
+  distroId: string;
+  distroName: string;
+  codename: string;
+  versionId: string;
+  family: string;
+  packageManager: string;
+  currentSources: string;
+  isMirror: boolean;
+  detectedMirror: string;
+  canWrite: boolean;
+  presets: MirrorPreset[];
+}
+
+export interface TimeSyncStatus {
+  now: string;
+  timezone: string;
+  ntpSynchronized: boolean;
+  service: string;
+  serviceActive: boolean;
+  serviceEnabled: boolean;
+  chronyInstalled: boolean;
+  ntpdActive: boolean;
+  servers: string[];
+  tracking: [string, string][];
+  canWrite: boolean;
+}
+
+export interface TimezoneStatus {
+  timezone: string;
+  localTime: string;
+  universalTime: string;
+  rtcInLocalTz: boolean;
+  ntpSynchronized: boolean;
+  zones: string[];
+  canWrite: boolean;
+  commonZones: string[];
+}
+
+export interface ServiceInfo {
+  unit: string;
+  state: string;
+  enabled: boolean;
+  active: boolean;
+  description: string;
+  isTarget: boolean;
+}
+
+export interface ServiceCreateRequest {
+  name: string;
+  description?: string;
+  command: string;
+  workingDirectory?: string;
+  user?: string;
+  enable?: boolean;
+  start?: boolean;
+}
+
+export interface ProcessInfo {
+  pid: number;
+  ppid: number;
+  user: string;
+  cpu: number;
+  mem: number;
+  rss: number;
+  state: string;
+  name: string;
+  command: string;
+}
+
+export interface CoreUsage {
+  name: string;
+  usage: number;
+}
+
+export interface PerformanceSnapshot {
+  cpu: number;
+  cores: CoreUsage[];
+  memoryPercent: number;
+  memoryUsed: number;
+  memoryTotal: number;
+  memoryAvailable: number;
+  memoryCached: number;
+  swapPercent: number;
+  swapUsed: number;
+  swapTotal: number;
+  diskPercent: number;
+  diskUsed: number;
+  diskTotal: number;
+  diskAvailable: number;
+  networkRx: number;
+  networkTx: number;
+  uptime: number;
+  load: string;
+  kernel: string;
+  hostname: string;
+  cpuModel: string;
+  processCount: number;
+}
+
+export interface FirewallActionRequest {
+  action: "install" | "enable" | "disable" | "set-defaults" | "allow" | "deny" | "limit" | "delete";
+  spec?: string;
+  policy?: string;
+  backend?: string;
+  ruleAction?: string;
+}
+
+export interface ActionOutcome<T> {
+  ok: boolean;
+  output: string;
+  status: T;
+}
+
+export const sysadmin = {
+  firewallStatus: (id: string) => call<FirewallStatus>("firewall_status", { id }),
+  firewallAction: (id: string, request: FirewallActionRequest) =>
+    call<ActionOutcome<FirewallStatus>>("firewall_action", { id, request }),
+  mirrorStatus: (id: string) => call<MirrorStatus>("mirror_status", { id }),
+  mirrorApply: (id: string, mirror: string) =>
+    call<ActionOutcome<MirrorStatus>>("mirror_apply", { id, request: { mirror } }),
+  timeStatus: (id: string) => call<TimeSyncStatus>("time_status", { id }),
+  timeAction: (id: string, action: string, servers: string[] = []) =>
+    call<ActionOutcome<TimeSyncStatus>>("time_action", { id, request: { action, servers } }),
+  timezoneStatus: (id: string) => call<TimezoneStatus>("timezone_status", { id }),
+  timezoneSet: (id: string, timezone: string) =>
+    call<ActionOutcome<TimezoneStatus>>("timezone_set", { id, request: { timezone } }),
+  servicesList: (id: string) => call<{ services: ServiceInfo[] }>("services_list", { id }),
+  serviceAction: (id: string, unit: string, action: string) =>
+    call<{ ok: boolean; output: string }>("service_action", { id, request: { unit, action } }),
+  serviceCreate: (id: string, request: ServiceCreateRequest) =>
+    call<{ ok: boolean; output: string }>("service_create", { id, request }),
+  processesList: (id: string) => call<{ processes: ProcessInfo[] }>("processes_list", { id }),
+  processKill: (id: string, pid: number, signal = "TERM") =>
+    call<{ ok: boolean; output: string }>("process_kill", { id, request: { pid, signal } }),
+  performance: (id: string) => call<PerformanceSnapshot>("performance_snapshot", { id }),
 };

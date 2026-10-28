@@ -157,6 +157,15 @@ pub struct RemoteFile {
     pub owner: String,
     pub group: String,
     pub modified: u64,
+    /// 桌面快捷方式指向的真实路径（普通文件为空）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// 快捷方式目标类型：file / directory。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_type: Option<String>,
+    /// 快捷方式链接文件自身的路径。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shortcut_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

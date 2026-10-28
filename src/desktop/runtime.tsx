@@ -5,6 +5,8 @@ import type { AppId } from "./apps";
 export interface OpenAppOptions {
   payload?: Record<string, unknown>;
   title?: string;
+  /** 为 true 时总是新建窗口，而不是复用已打开的同类窗口。 */
+  newWindow?: boolean;
 }
 
 export interface DesktopRuntime {

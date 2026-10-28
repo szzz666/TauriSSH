@@ -97,7 +97,8 @@ body {
 .app-scroll {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
   padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
@@ -129,6 +130,7 @@ body {
 
 .scroll-y {
   overflow-y: auto;
+  overflow-x: hidden;
   min-height: 0;
 }
 
@@ -280,34 +282,61 @@ html[data-theme="light"] .os-topbar {
 
 .os-icons {
   position: absolute;
-  inset: 14px auto auto 14px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, 88px);
-  grid-auto-rows: 92px;
-  gap: 6px;
+  inset: 0;
   z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .os-icons.is-mobile {
-  position: static;
+  position: absolute;
+  inset: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
-  gap: 14px 8px;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  grid-auto-rows: 96px;
+  gap: 10px 8px;
   padding: 14px 10px 20px;
+  width: auto;
+  height: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  align-content: start;
+  pointer-events: auto;
+}
+
+.os-icons.is-mobile .os-icon {
+  position: static;
+  width: auto;
+  height: auto;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .os-icon {
+  position: absolute;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
+  width: 100px;
+  height: 88px;
   padding: 6px 2px;
   border: 0;
   border-radius: 14px;
   background: transparent;
   color: #f1f5f9;
-  cursor: pointer;
-  transition: background 0.16s ease, transform 0.16s ease;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  transition: background 0.16s ease;
+}
+
+.os-icon.is-dragging {
+  z-index: 5;
+  cursor: grabbing;
+  opacity: 0.86;
 }
 
 html[data-theme="light"] .os-icon {
@@ -318,18 +347,77 @@ html[data-theme="light"] .os-icon {
 .os-icon:focus-visible {
   background: rgba(148, 163, 184, 0.18);
   outline: none;
-  transform: translateY(-1px);
 }
 
 .os-icon-tile {
+  position: relative;
   display: grid;
   place-items: center;
   width: 46px;
   height: 46px;
   border-radius: 14px;
-  font-size: 21px;
+  font-size: 22px;
   color: #fff;
-  box-shadow: 0 8px 20px rgba(2, 6, 23, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.os-icon-tile .anticon {
+  font-size: 22px;
+  color: #fff;
+}
+
+.os-icon-link {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #6d28d9;
+  background: #ffffff;
+  border: 1px solid rgba(109, 40, 217, 0.35);
+}
+
+.os-icon-link svg {
+  width: 11px;
+  height: 11px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.os-desktop-loading,
+.os-desktop-error {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 2;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.62);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.os-desktop-error {
+  color: #fecaca;
+}
+
+html[data-theme="light"] .os-desktop-loading,
+html[data-theme="light"] .os-desktop-error {
+  color: #334155;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+html[data-theme="light"] .os-desktop-error {
+  color: #b91c1c;
 }
 
 .os-icons.is-mobile .os-icon-tile {
@@ -343,16 +431,13 @@ html[data-theme="light"] .os-icon {
   font-size: 11.5px;
   line-height: 1.25;
   text-align: center;
-  text-shadow: 0 1px 3px rgba(2, 6, 23, 0.45);
   max-width: 84px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-html[data-theme="light"] .os-icon-label {
-  text-shadow: none;
-}
+
 
 /* 窗口 */
 .os-window {
@@ -375,6 +460,12 @@ html[data-theme="light"] .os-window {
 
 .os-window.is-active {
   box-shadow: 0 28px 70px rgba(2, 6, 23, 0.5), 0 0 0 1px rgba(59, 130, 246, 0.55);
+}
+
+.os-window.is-maximized {
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
 }
 
 @keyframes os-window-in {
@@ -447,7 +538,8 @@ html[data-theme="light"] .os-window {
   flex: 1;
   min-height: 0;
   padding: 12px 14px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   color: var(--app-text);
 }
 
@@ -480,10 +572,31 @@ html[data-theme="light"] .os-window {
 .os-terminal-host {
   flex: 1;
   min-height: 0;
-  border-radius: 10px;
   overflow: hidden;
-  background: var(--term-bg);
-  padding: 6px;
+  background: transparent;
+  padding: 0;
+}
+
+.os-terminal-host .xterm {
+  height: 100%;
+}
+
+.os-terminal-host .xterm-viewport {
+  overflow-y: auto;
+}
+
+html[data-theme="light"] .os-terminal-host .xterm,
+html[data-theme="light"] .os-terminal-host .xterm-viewport {
+  background-color: #f5faff !important;
+}
+
+html[data-theme="dark"] .os-terminal-host .xterm,
+html[data-theme="dark"] .os-terminal-host .xterm-viewport {
+  background-color: #071523 !important;
+}
+
+.os-terminal-host .xterm-screen {
+  background-color: transparent !important;
 }
 
 /* 任务栏 */
@@ -562,6 +675,17 @@ html[data-theme="light"] .os-task {
   flex: 0 0 auto;
 }
 
+.os-task-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  color: #fff;
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
 .os-task-label {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -572,6 +696,72 @@ html[data-theme="light"] .os-task {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
+  max-width: 62vw;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.os-dock::-webkit-scrollbar {
+  display: none;
+}
+
+.os-dock-screen {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 12px;
+  color: #f8fafc;
+  font-weight: 700;
+  font-size: 15px;
+  cursor: pointer;
+  background: linear-gradient(135deg, #6d28d9, #a855f7);
+  transition: transform 0.16s ease, opacity 0.16s ease;
+}
+
+.os-dock-screen:hover {
+  transform: translateY(-2px);
+}
+
+.os-dock-screen.is-active {
+  outline: 2px solid rgba(167, 139, 250, 0.9);
+  outline-offset: 1px;
+}
+
+.os-dock-screen.is-min {
+  opacity: 0.58;
+}
+
+.os-dock-new {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px dashed rgba(148, 163, 184, 0.55);
+  border-radius: 10px;
+  color: #cbd5e1;
+  cursor: pointer;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.os-dock-new:hover {
+  color: #fff;
+  border-color: rgba(96, 165, 250, 0.9);
+  background: rgba(37, 99, 235, 0.25);
+}
+
+html[data-theme="light"] .os-dock-new {
+  color: #334155;
+}
+
+.os-dock-divider {
+  width: 1px;
+  height: 28px;
+  background: rgba(148, 163, 184, 0.3);
   flex: 0 0 auto;
 }
 
@@ -609,6 +799,25 @@ html[data-theme="light"] .os-task {
   margin-bottom: 12px;
 }
 
+.os-start-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.os-start-brand strong {
+  display: block;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.os-start-brand small {
+  display: block;
+  font-size: 11px;
+  color: var(--app-muted);
+}
+
 .os-start-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -644,26 +853,33 @@ html[data-theme="light"] .os-task {
   height: 40px;
 }
 
+/* 窗口固定在可视区域内，滚动交给图标层，避免滚动桌面时窗口被一起推走 */
 .os-shell.is-mobile .os-desktop {
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+  overflow: hidden;
 }
 
 .os-shell.is-mobile .os-topbar,
 .os-shell.is-mobile .os-taskbar {
   width: 100%;
+  /* 顶栏 / 任务栏为 content-box，width:100% 加上左右内边距会溢出，导致右侧按钮被裁切 */
+  box-sizing: border-box;
   flex: 0 0 auto;
 }
 
 .os-shell.is-mobile .os-window {
-  border-radius: 20px;
+  border-radius: 16px;
   left: 8px !important;
   top: 8px !important;
   width: calc(100% - 16px) !important;
-  height: calc(100% - 16px) !important;
+  height: calc(100% - 8px) !important;
 }
 
 .os-shell.is-mobile .os-window-resize {
+  display: none;
+}
+
+/* 手机上窗口恒为全屏，最大化/还原按钮无意义 */
+.os-shell.is-mobile .os-window-actions button:nth-child(2) {
   display: none;
 }
 
@@ -679,7 +895,9 @@ html[data-theme="light"] .os-task {
 }
 
 .os-shell.is-mobile .os-dock {
-  display: none;
+  display: flex;
+  gap: 5px;
+  max-width: 46vw;
 }
 
 .os-shell.is-mobile .os-task {
@@ -698,4 +916,301 @@ html[data-theme="light"] .os-task {
   .os-window-title small {
     display: none;
   }
+}
+
+/* ============ 右键菜单 ============ */
+.ctx-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+
+.ctx-panel {
+  position: fixed;
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--app-panel);
+  border: 1px solid var(--app-border);
+  box-shadow: 0 22px 54px rgba(2, 6, 23, 0.38);
+  backdrop-filter: blur(14px);
+}
+
+.ctx-panel .ant-menu {
+  border-inline-end: 0 !important;
+  background: transparent;
+  box-shadow: none;
+}
+
+.ctx-panel .ant-menu-item {
+  margin-inline: 0;
+  width: 100%;
+}
+
+/* ============ 文件操作进度 ============ */
+.file-action-progress {
+  position: fixed;
+  right: 18px;
+  bottom: calc(82px + env(safe-area-inset-bottom));
+  z-index: 9998;
+  width: min(320px, calc(100vw - 36px));
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--app-panel);
+  border: 1px solid var(--app-border);
+  box-shadow: 0 18px 44px rgba(2, 6, 23, 0.34);
+}
+
+.file-action-progress-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.file-action-progress small {
+  color: var(--app-muted);
+  font-size: 11px;
+}
+
+/* ============ 系统运维窗口 ============ */
+.sysadmin-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+  padding-bottom: 4px;
+}
+
+.sysadmin-page.scroll-y {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
+/* antd Row 的负外边距会让内容超出窗口宽度，产生横向滚动条 */
+.sysadmin-page .ant-row,
+.tm-panel .ant-row {
+  margin-inline: 0 !important;
+}
+
+.sysadmin-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+.sysadmin-page-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sysadmin-page-title .ant-typography {
+  margin: 0;
+}
+
+.sysadmin-page-title h4.ant-typography {
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.sysadmin-page-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  color: #fff;
+  font-size: 21px;
+  flex: 0 0 auto;
+}
+
+.sysadmin-loading {
+  display: grid;
+  place-items: center;
+  height: 260px;
+}
+
+.sysadmin-code {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--app-text);
+}
+
+html[data-theme="dark"] .sysadmin-code {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.mirror-card {
+  height: 100%;
+}
+
+.mirror-card.is-active {
+  border-color: #52c41a;
+  box-shadow: 0 0 0 1px rgba(82, 196, 26, 0.3);
+}
+
+.mirror-url {
+  display: block;
+  word-break: break-all;
+  white-space: normal;
+}
+
+.screen-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.screen-create-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.service-panel {
+  min-height: 0;
+}
+
+.service-panel.is-compact {
+  padding-top: 2px;
+}
+
+/* ============ 任务管理器 ============ */
+.task-manager {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.task-manager .sysadmin-page-head {
+  margin-bottom: 4px;
+}
+
+.tm-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tm-tabs .ant-tabs-nav {
+  margin-bottom: 8px;
+}
+
+.tm-tabs .ant-tabs-content-holder,
+.tm-tabs .ant-tabs-content,
+.tm-tabs .ant-tabs-tabpane {
+  flex: 1;
+  min-height: 0;
+}
+
+.tm-tabs .ant-tabs-content-holder {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.tm-panel {
+  min-height: 0;
+}
+
+/* 表格不再产生横向滚动条：窄列省略，宽列自适应剩余空间 */
+.os-window-body .ant-table-wrapper,
+.os-window-body .ant-table,
+.os-window-body .ant-table-container,
+.os-window-body .ant-table-content,
+.os-window-body .ant-table-body,
+.os-window-body .ant-table-header {
+  max-width: 100%;
+}
+
+.os-window-body .ant-table-content,
+.os-window-body .ant-table-body {
+  overflow-x: hidden !important;
+}
+
+.os-window-body .ant-table-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.os-window-body .ant-table {
+  width: 100%;
+}
+
+/* 安全网：窗口内任何容器都不显示横向滚动条，内容宽度超限时按列省略 */
+.os-window-body ::-webkit-scrollbar:horizontal,
+.tm-tabs .ant-tabs-content-holder::-webkit-scrollbar:horizontal {
+  height: 0;
+  display: none;
+}
+
+.os-window-body .ant-table-content::-webkit-scrollbar,
+.os-window-body .ant-table-body::-webkit-scrollbar {
+  height: 0;
+}
+
+.file-name-cell {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.file-name-cell .ant-typography {
+  min-width: 0;
+}
+
+.tm-big-percent {
+  font-size: 42px;
+  font-weight: 700;
+  line-height: 1.08;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 4px;
+}
+
+.tm-sparkline {
+  display: block;
+  width: 100%;
+  height: 120px;
+  margin: 4px 0 8px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(22, 119, 255, 0.06), transparent);
+}
+
+.tm-core {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--app-muted);
+}
+
+.tm-core span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.os-start {
+  max-height: calc(100vh - 92px);
+  overflow-y: auto;
 }

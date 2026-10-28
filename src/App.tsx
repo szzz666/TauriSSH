@@ -238,7 +238,7 @@ export default function App() {
                   安全远程工作台
                 </Typography.Title>
                 <Typography.Text type="secondary">
-                  连接 Linux 主机后进入桌面工作区：终端、SFTP 文件管理、后台会话与资源监控都以窗口形式打开。
+                  连接 Linux 主机后进入桌面工作区：终端、SFTP 文件管理、任务管理器，以及防火墙、软件源、系统时间等运维工具都以窗口形式打开；服务与开机启动项统一在任务管理器中管理。
                 </Typography.Text>
               </Space>
             }

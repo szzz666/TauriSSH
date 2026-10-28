@@ -361,6 +361,8 @@ async fn ensure_tools(session: &Arc<Session>, tools: &[String]) -> AppResult<Vec
     Ok(status.missing)
 }
 
+const MAX_SHORTCUT_FILE_BYTES: u64 = 64 * 1024;
+
 async fn create_desktop_shortcut(
     sftp: &russh_sftp::client::SftpSession,
     path: &str,
@@ -420,29 +422,38 @@ pub async fn desktop_list(state: State<'_, AppState>, id: String) -> AppResult<V
         .canonicalize(".")
         .await
         .map_err(|e| AppError::sftp(e.to_string()))?;
-    let dir = format!("{}/.webssh/desktop", home.trim_end_matches('/'));
-    let mut entries = match sftp::list_dir(&sftp, &dir).await {
-        Ok(list) => list,
-        Err(_) => Vec::new(),
-    };
+    let home_dir = home.trim_end_matches('/').to_string();
+    prepare_dir(&sftp, &format!("{home_dir}/.webssh")).await?;
+    let dir = format!("{home_dir}/.webssh/desktop");
+    prepare_dir(&sftp, &dir).await?;
+    let mut entries = sftp::list_dir(&sftp, &dir).await?;
     for entry in entries.iter_mut() {
         if entry.kind != "file" || !entry.name.ends_with(".webssh-link") {
+            continue;
+        }
+        if entry.size > MAX_SHORTCUT_FILE_BYTES {
             continue;
         }
         let Ok(content) = sftp.read(entry.path.clone()).await else { continue };
         let Ok(text) = String::from_utf8(content) else { continue };
         let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
-        let target = value.get("target").and_then(|v| v.as_str()).unwrap_or("");
+        let target = value.get("target").and_then(|v| v.as_str()).unwrap_or("").trim();
         let target_type = value.get("targetType").and_then(|v| v.as_str()).unwrap_or("");
         if target.is_empty() || (target_type != "file" && target_type != "directory") {
             continue;
         }
+        let label = value
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| entry.name.trim_end_matches(".webssh-link"));
+        entry.shortcut_path = Some(entry.path.clone());
+        entry.target = Some(target.to_string());
+        entry.target_type = Some(target_type.to_string());
         entry.kind = "shortcut".into();
-        entry.name = entry.name.trim_end_matches(".webssh-link").to_string();
-        entry.path = target.to_string();
+        entry.name = label.to_string();
     }
     let _ = sftp.close().await;
-    let home_dir = home.trim_end_matches('/').to_string();
     Ok(json!({ "home": home_dir, "dir": dir, "files": entries }))
 }
 
@@ -704,7 +715,21 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync +
         tools_inspect,
         tools_install,
         file_job,
-        terminal_screen_attach
+        terminal_screen_attach,
+        crate::commands_sysadmin::firewall_status,
+        crate::commands_sysadmin::firewall_action,
+        crate::commands_sysadmin::mirror_status,
+        crate::commands_sysadmin::mirror_apply,
+        crate::commands_sysadmin::time_status,
+        crate::commands_sysadmin::time_action,
+        crate::commands_sysadmin::timezone_status,
+        crate::commands_sysadmin::timezone_set,
+        crate::commands_sysadmin::services_list,
+        crate::commands_sysadmin::service_action,
+        crate::commands_sysadmin::service_create,
+        crate::commands_sysadmin::processes_list,
+        crate::commands_sysadmin::process_kill,
+        crate::commands_sysadmin::performance_snapshot
     ]
 }
 

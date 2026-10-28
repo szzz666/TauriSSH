@@ -1,21 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Alert, App, Button, Dropdown, Empty, Input, Space, Spin, Table, Tooltip, Typography,
+  Alert, Button, Dropdown, Empty, Input, Space, Spin, Table, Tag, Tooltip, Typography,
 } from "antd";
+import type { MenuProps } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
-  ArrowUpOutlined, CopyOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, FileAddOutlined,
-  FileZipOutlined, FolderAddOutlined, FolderOpenOutlined, ReloadOutlined, ScissorOutlined,
-  UploadOutlined,
+  ArrowUpOutlined, BlockOutlined, CaretRightOutlined, CopyOutlined, DeleteOutlined,
+  DownloadOutlined, EditOutlined, FileAddOutlined, FileZipOutlined, FolderAddOutlined,
+  MoreOutlined, ReloadOutlined, ScissorOutlined, UploadOutlined,
 } from "@ant-design/icons";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { files as filesApi, jobs as jobsApi, type RemoteFile, type ToolStatus, tools as toolsApi } from "../api";
-import { useStore } from "../store";
+import { files as filesApi, type RemoteFile } from "../api";
+import { useRuntime } from "../desktop/runtime";
+import { useFileClipboard } from "../file-clipboard";
+import { useFileActions, FileActionProgress } from "./file-actions";
+import { useContextMenu } from "./ContextMenu";
+import { useCompactTable, useElementHeight } from "./sysadmin/shared";
 
 interface Props {
   connectionId: string;
   initialPath?: string;
 }
+
+const ARCHIVE_RE = /\.(zip|tar\.gz|tgz|gz)$/i;
 
 function formatSize(size: number, kind: string) {
   if (kind === "directory") return "--";
@@ -26,7 +32,7 @@ function formatSize(size: number, kind: string) {
     value /= 1024;
     index += 1;
   }
-  return `${index === 0 ? value : value.toFixed(value < 10 ? 1 : 0)} ${units[index]}`;
+  return index === 0 ? String(value) + " B" : value.toFixed(value < 10 ? 1 : 0) + " " + units[index];
 }
 
 function formatTime(seconds: number) {
@@ -34,20 +40,20 @@ function formatTime(seconds: number) {
   return new Date(seconds * 1000).toLocaleString();
 }
 
-const ARCHIVE_RE = /\.(zip|tar\.gz|tgz|gz)$/i;
-
-/** 文件管理：SFTP 浏览、上传/下载、编辑、压缩解压、权限与桌面快捷方式。 */
+/** 文件管理：SFTP 浏览、上传/下载、编辑、压缩解压、权限、桌面快捷方式与完整右键菜单。 */
 export default function FileManager({ connectionId, initialPath }: Props) {
-  const { message, modal } = App.useApp();
+  const runtime = useRuntime();
   const [path, setPath] = useState(initialPath || "/");
   const [pathInput, setPathInput] = useState(initialPath || "/");
   const [items, setItems] = useState<RemoteFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
-  const [progress, setProgress] = useState<{ title: string; percent: number; detail: string } | null>(null);
-  const clipboard = useRef<{ mode: "copy" | "cut"; entries: RemoteFile[] } | null>(null);
-  const record = useStore((state) => state.record);
+  const [tableRef, tableHeight] = useElementHeight<HTMLDivElement>(46);
+  const [measureRef, compact] = useCompactTable<HTMLDivElement>(640);
+  const isMobile = runtime.isMobile || compact;
+  const clipboard = useFileClipboard((state) => state);
+  const menu = useContextMenu();
 
   const load = useCallback(
     async (target: string) => {
@@ -71,398 +77,144 @@ export default function FileManager({ connectionId, initialPath }: Props) {
 
   useEffect(() => {
     void load(initialPath || "/");
-  }, [load, initialPath]);
+  }, [initialPath, load]);
 
-  const selectedEntries = useMemo(() => items.filter((item) => selected.includes(item.path)), [items, selected]);
+  const actions = useFileActions({
+    connectionId,
+    onRefresh: () => load(path),
+    onOpenEditor: (target) => {
+      runtime.openApp("editor", { payload: { path: target } });
+    },
+    onOpenFiles: (target) => {
+      void load(target);
+    },
+    onOpenScreen: (session) => {
+      runtime.openApp("terminal", {
+        payload: { screenName: session.name },
+        title: "终端 · " + session.label,
+      });
+    },
+  });
 
-  const ensureTools = async (required: string[]): Promise<ToolStatus | null> => {
-    try {
-      const status = await toolsApi.inspect(connectionId, required);
-      if (status.missing.length === 0) return status;
-      if (!status.canInstall) {
-        message.error(`远程服务器缺少 ${status.missing.join("、")}，且未检测到支持的包管理器`);
-        return null;
-      }
-      return await new Promise<ToolStatus | null>((resolve) => {
-        modal.confirm({
-          title: `安装 ${status.missing.join(" / ")}？`,
-          content: (
-            <div>
-              <p>远程服务器缺少所需命令，将执行：</p>
-              <Typography.Paragraph code copyable>
-                {status.installCommand}
-              </Typography.Paragraph>
-            </div>
-          ),
-          okText: "确认安装",
-          cancelText: "取消",
-          onOk: async () => {
-            setProgress({ title: "正在安装远程工具", percent: 0, detail: status.missing.join(", ") });
-            try {
-              const installed = await toolsApi.install(connectionId, status.missing);
-              message.success("远程工具已就绪");
-              resolve(installed);
-            } catch (err) {
-              message.error((err as Error).message);
-              resolve(null);
-            } finally {
-              setProgress(null);
-            }
-          },
-          onCancel: () => resolve(null),
+  const selectedEntries = useMemo(
+    () => items.filter((item) => selected.includes(item.path)),
+    [items, selected],
+  );
+
+  const canPaste = clipboard.connectionId === connectionId && clipboard.entries.length > 0;
+  const selectedArchive = selectedEntries.find((entry) => ARCHIVE_RE.test(actions.targetPath(entry).toLowerCase()));
+
+  const openEntry = useCallback(
+    (entry: RemoteFile) => {
+      void actions.handleEntryAction("open", [entry]);
+    },
+    [actions],
+  );
+
+  const showEntryMenu = useCallback(
+    (event: React.MouseEvent, entry: RemoteFile) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const entries = selected.includes(entry.path) ? selectedEntries : [entry];
+      if (!selected.includes(entry.path)) setSelected([entry.path]);
+      const menuItems = actions.entryMenuItems(entries, { desktop: false });
+      menu.open(event, menuItems, (key) => {
+        void actions.handleEntryAction(key, entries, { desktop: false });
+      });
+    },
+    [actions, menu, selected, selectedEntries],
+  );
+
+  const showBackgroundMenu = useCallback(
+    (event: React.MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (target.closest("tbody tr")) return;
+      event.preventDefault();
+      const menuItems = actions.backgroundMenuItems(path, {
+        desktop: false,
+        onSelectAll: () => setSelected(items.map((item) => item.path)),
+        onOpenTerminal: () => runtime.openApp("terminal", { title: "终端" }),
+      });
+      menu.open(event, menuItems, (key) => {
+        void actions.handleBackgroundAction(key, path, {
+          desktop: false,
+          onSelectAll: () => setSelected(items.map((item) => item.path)),
+          onOpenTerminal: () => runtime.openApp("terminal", { title: "终端" }),
         });
       });
-    } catch (err) {
-      message.error((err as Error).message);
-      return null;
-    }
-  };
+    },
+    [actions, items, menu, path, runtime],
+  );
 
-  const waitJob = async (jobId: string, title: string) => {
-    setProgress({ title, percent: 0, detail: "正在处理远程文件..." });
-    for (;;) {
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      try {
-        const job = await jobsApi.get(jobId);
-        if (job.status === "completed") {
-          setProgress(null);
-          return true;
-        }
-        if (job.status === "failed") {
-          setProgress(null);
-          message.error(job.error || "文件操作失败");
-          return false;
-        }
-      } catch (err) {
-        setProgress(null);
-        message.error((err as Error).message);
-        return false;
-      }
-    }
-  };
-
-  const handleUpload = async () => {
-    const picked = await openDialog({ multiple: true, directory: false });
-    if (!picked) return;
-    const list = Array.isArray(picked) ? picked : [picked];
-    setProgress({ title: "正在上传", percent: 0, detail: list.length + " 个文件" });
-    try {
-      await filesApi.upload(connectionId, list, path);
-      record("UPLOAD", `${list.length} 个文件 → ${path}`);
-      message.success("上传完成");
-      await load(path);
-    } catch (err) {
-      message.error((err as Error).message);
-    } finally {
-      setProgress(null);
-    }
-  };
-
-  const handleDownload = async (entries: RemoteFile[]) => {
-    for (const entry of entries) {
-      if (entry.type === "directory") {
-        const status = await ensureTools(["tar"]);
-        if (!status) return;
-      }
-      const target = await saveDialog({ defaultPath: entry.name });
-      if (!target) return;
-      try {
-        await filesApi.download(connectionId, target, entry.path);
-        record("DOWNLOAD", entry.path);
-        message.success(`已下载 ${entry.name}`);
-      } catch (err) {
-        message.error((err as Error).message);
-      }
-    }
-  };
-
-  const handleCompress = async (entries: RemoteFile[]) => {
-    const base = entries.length === 1 ? entries[0].name.replace(ARCHIVE_RE, "") : "archive";
-    const formats = entries.length === 1 && entries[0].type !== "directory"
-      ? [
-          { label: "TAR.GZ（推荐）", value: "tar.gz" },
-          { label: "ZIP", value: "zip" },
-          { label: "GZIP（单文件）", value: "gz" },
-        ]
-      : [
-          { label: "TAR.GZ（推荐）", value: "tar.gz" },
-          { label: "ZIP", value: "zip" },
-        ];
-    let name = base;
-    let format = "tar.gz";
-    const confirmed = await new Promise<boolean>((resolve) => {
-      modal.confirm({
-        title: `压缩 ${entries.length} 个项目`,
-        content: (
-          <div>
-            <Input defaultValue={base} onChange={(event) => { name = event.target.value; }} placeholder="基础名称" />
-            <Space direction="vertical" style={{ marginTop: 12, width: "100%" }}>
-              {formats.map((item) => (
-                <Button
-                  key={item.value}
-                  block
-                  type={item.value === format ? "primary" : "default"}
-                  onClick={(event) => {
-                    format = item.value;
-                    event.currentTarget.parentElement
-                      ?.querySelectorAll("button")
-                      .forEach((btn) => btn.classList.remove("ant-btn-primary"));
-                    event.currentTarget.classList.add("ant-btn-primary");
-                  }}
-                >
-                  {item.label}
-                </Button>
-              ))}
-            </Space>
-          </div>
-        ),
-        okText: "开始压缩",
-        cancelText: "取消",
-        onOk: () => resolve(true),
-        onCancel: () => resolve(false),
-      });
-    });
-    if (!confirmed) return;
-    const destination = `${path === "/" ? "" : path}/${name || base}.${format}`;
-    const status = await ensureTools([format === "zip" ? "zip" : format === "gz" ? "gzip" : "tar"]);
-    if (!status) return;
-    try {
-      const result = (await filesApi.operation(connectionId, {
-        action: "compress",
-        path: entries[0].path,
-        destination,
-        paths: entries.map((item) => item.path),
-      })) as { jobId: string };
-      if (await waitJob(result.jobId, "正在压缩")) {
-        message.success("压缩完成");
-        await load(path);
-      }
-    } catch (err) {
-      message.error((err as Error).message);
-    }
-  };
-
-  const handleExtract = async (entry: RemoteFile) => {
-    const status = await ensureTools([entry.name.endsWith(".zip") ? "unzip" : entry.name.endsWith(".gz") ? "gzip" : "tar"]);
-    if (!status) return;
-    const base = entry.name.replace(ARCHIVE_RE, "") || "解压内容";
-    const destination = `${path === "/" ? "" : path}/${base}`;
-    try {
-      const result = (await filesApi.operation(connectionId, {
-        action: "extract",
-        path: entry.path,
-        destination,
-      })) as { jobId: string };
-      if (await waitJob(result.jobId, "正在解压")) {
-        message.success("解压完成");
-        await load(path);
-      }
-    } catch (err) {
-      message.error((err as Error).message);
-    }
-  };
-
-  const promptName = async (title: string, initial: string, placeholder: string) => {
-    let value = initial;
-    return new Promise<string | null>((resolve) => {
-      modal.confirm({
-        title,
-        content: <Input defaultValue={initial} onChange={(event) => { value = event.target.value; }} placeholder={placeholder} />,
-        okText: "确定",
-        cancelText: "取消",
-        onOk: () => {
-          const trimmed = value.trim();
-          if (!trimmed) {
-            message.error("请输入有效内容");
-            return Promise.reject(new Error("invalid"));
-          }
-          if (trimmed.includes("/") || trimmed === "." || trimmed === "..") {
-            message.error("名称不能包含 /，也不能是 . 或 ..");
-            return Promise.reject(new Error("invalid"));
-          }
-          resolve(trimmed);
-        },
-        onCancel: () => resolve(null),
-      });
-    });
-  };
-
-  const handleMkdir = async () => {
-    const name = await promptName("新建文件夹", "新建文件夹", "文件夹名称");
-    if (!name) return;
-    try {
-      await filesApi.operation(connectionId, { action: "mkdir", path: `${path}/${name}` });
-      record("FILE MKDIR", `${path}/${name}`);
-      await load(path);
-    } catch (err) {
-      message.error((err as Error).message);
-    }
-  };
-
-  const handleCreateFile = async () => {
-    const name = await promptName("新建文件", "untitled.txt", "文件名");
-    if (!name) return;
-    try {
-      await filesApi.operation(connectionId, { action: "create", path: `${path}/${name}`, content: "" });
-      record("FILE CREATE", `${path}/${name}`);
-      await load(path);
-    } catch (err) {
-      message.error((err as Error).message);
-    }
-  };
-
-  const handleRename = async (entry: RemoteFile) => {
-    const name = await promptName("重命名", entry.name, "新名称");
-    if (!name || name === entry.name) return;
-    const destination = `${path === "/" ? "" : path}/${name}`;
-    try {
-      await filesApi.operation(connectionId, { action: "rename", path: entry.path, destination });
-      record("FILE RENAME", `${entry.path} → ${destination}`);
-      await load(path);
-    } catch (err) {
-      message.error((err as Error).message);
-    }
-  };
-
-  const handleDelete = async (entries: RemoteFile[]) => {
-    modal.confirm({
-      title: `删除 ${entries.length} 个项目？`,
-      content: entries.map((item) => item.name).join("、"),
-      okText: "删除",
-      okButtonProps: { danger: true },
-      cancelText: "取消",
-      onOk: async () => {
-        for (const entry of entries) {
-          try {
-            await filesApi.operation(connectionId, { action: "delete", path: entry.path });
-            record("FILE DELETE", entry.path);
-          } catch (err) {
-            message.error(`${entry.name}：${(err as Error).message}`);
-          }
-        }
-        await load(path);
-      },
-    });
-  };
-
-  const handlePaste = async () => {
-    const clip = clipboard.current;
-    if (!clip) return;
-    for (const entry of clip.entries) {
-      const target = `${path === "/" ? "" : path}/${entry.name}`;
-      try {
-        if (clip.mode === "copy") {
-          await filesApi.operation(connectionId, { action: "copy", path: entry.path, destination: target });
-          record("FILE COPY", `${entry.path} → ${target}`);
-        } else {
-          await filesApi.operation(connectionId, { action: "move", path: entry.path, destination: target });
-          record("FILE MOVE", `${entry.path} → ${target}`);
-        }
-      } catch (err) {
-        message.error(`${entry.name}：${(err as Error).message}`);
-      }
-    }
-    if (clip.mode === "cut") clipboard.current = null;
-    await load(path);
-  };
-
-  const handleChmod = async (entry: RemoteFile) => {
-    let mode = entry.permissions.slice(1).replace(/-/g, "0");
-    const numeric = entry.permissions
-      .slice(1)
-      .replace(/[^rwx-]/g, "")
-      .match(/.{3}/g)
-      ?.map((chunk) => {
-        let value = 0;
-        if (chunk[0] === "r") value += 4;
-        if (chunk[1] === "w") value += 2;
-        if (chunk[2] === "x" || chunk[2] === "s" || chunk[2] === "t") value += 1;
-        return value;
-      })
-      .join("");
-    if (numeric) mode = numeric;
-    return new Promise<void>((resolve) => {
-      modal.confirm({
-        title: `修改权限 · ${entry.name}`,
-        content: (
-          <Input
-            defaultValue={mode}
-            maxLength={4}
-            onChange={(event) => { mode = event.target.value; }}
-            placeholder="例如 644 或 0755"
-          />
-        ),
-        okText: "应用",
-        cancelText: "取消",
-        onOk: async () => {
-          if (!/^[0-7]{3,4}$/.test(mode)) {
-            message.error("请输入 3 或 4 位八进制权限，例如 644 或 0755");
-            return Promise.reject(new Error("invalid"));
-          }
-          try {
-            await filesApi.operation(connectionId, { action: "chmod", path: entry.path, mode });
-            message.success("权限已更新");
-            await load(path);
-          } catch (err) {
-            message.error((err as Error).message);
-          }
-          resolve();
-        },
-        onCancel: () => resolve(),
-      });
-    });
-  };
-
-  const handleShortcut = async (entries: RemoteFile[]) => {
-    for (const entry of entries) {
-      try {
-        await filesApi.operation(connectionId, {
-          action: "desktop-shortcut",
-          path: entry.path,
-          type: entry.type === "directory" ? "directory" : "file",
-          name: entry.name,
-        });
-      } catch (err) {
-        message.error((err as Error).message);
-      }
-    }
-    message.success("已发送到远程桌面");
-  };
+  const moreItems: MenuProps["items"] = [
+    { key: "copy", label: "复制", icon: <CopyOutlined />, disabled: !selectedEntries.length },
+    { key: "cut", label: "剪切", icon: <ScissorOutlined />, disabled: !selectedEntries.length },
+    { key: "paste", label: "粘贴", disabled: !canPaste },
+    { type: "divider" },
+    { key: "chmod", label: "权限管理", disabled: selectedEntries.length === 0 },
+    { key: "desktop", label: "发送到桌面", disabled: !selectedEntries.length },
+    { key: "properties", label: "属性", disabled: selectedEntries.length !== 1 },
+    { key: "copyPath", label: "复制路径", disabled: selectedEntries.length !== 1 },
+    { type: "divider" },
+    { key: "delete", label: "删除", danger: true, disabled: !selectedEntries.length },
+  ];
 
   const columns: ColumnsType<RemoteFile> = [
     {
       title: "名称",
       dataIndex: "name",
-      render: (_, record_) => (
-        <Space>
-          {record_.type === "directory" ? <FolderOpenOutlined style={{ color: "#f0b429" }} /> : <FileAddOutlined className="muted" />}
+      render: (_, entry) => (
+        <Space className="file-name-cell">
+          {actions.fileIcon(entry)}
           <Typography.Link
-            onClick={() => {
-              if (record_.type === "directory") void load(record_.path);
+            ellipsis
+            title={entry.name}
+            onClick={(event) => {
+              event.stopPropagation();
+              openEntry(entry);
             }}
           >
-            {record_.name}
+            {entry.name}
           </Typography.Link>
+          {entry.type === "shortcut" ? <Tag>快捷方式</Tag> : null}
         </Space>
       ),
     },
-    { title: "权限", dataIndex: "permissions", width: 120, responsive: ["md"], render: (v) => <span className="mono">{v}</span> },
-    { title: "所有者", dataIndex: "owner", width: 90, responsive: ["lg"] },
-    { title: "大小", dataIndex: "size", width: 100, responsive: ["sm"], render: (_, r) => formatSize(r.size, r.type) },
-    { title: "修改时间", dataIndex: "modified", width: 180, responsive: ["md"], render: (v) => formatTime(v as number) },
+    // 窄屏下固定列宽会把名称列挤成 0 宽，这里按需裁剪次要列
+    ...(isMobile
+      ? []
+      : ([
+          {
+            title: "权限",
+            dataIndex: "permissions",
+            width: 110,
+            ellipsis: true,
+            render: (value: string) => <span className="mono">{value}</span>,
+          },
+          { title: "所有者", dataIndex: "owner", width: 90, ellipsis: true },
+        ] as ColumnsType<RemoteFile>)),
+    { title: "大小", dataIndex: "size", width: isMobile ? 76 : 90, render: (_, entry) => formatSize(entry.size, actions.targetKind(entry)) },
+    ...(isMobile
+      ? []
+      : ([
+          { title: "修改时间", dataIndex: "modified", width: 165, ellipsis: true, render: (value: number) => formatTime(value) },
+        ] as ColumnsType<RemoteFile>)),
     {
       title: "操作",
-      width: 150,
-      render: (_, record_) => (
+      width: isMobile ? 132 : 170,
+      render: (_, entry) => (
         <Space size={4}>
+          <Tooltip title={actions.targetKind(entry) === "directory" ? "打开" : "打开 / 编辑"}>
+            <Button size="small" type="text" icon={<CaretRightOutlined />} onClick={() => openEntry(entry)} />
+          </Tooltip>
           <Tooltip title="下载">
-            <Button size="small" type="text" icon={<DownloadOutlined />} onClick={() => void handleDownload([record_])} />
+            <Button size="small" type="text" icon={<DownloadOutlined />} onClick={() => void actions.handleEntryAction("download", [entry])} />
           </Tooltip>
           <Tooltip title="重命名">
-            <Button size="small" type="text" icon={<EditOutlined />} onClick={() => void handleRename(record_)} />
+            <Button size="small" type="text" icon={<EditOutlined />} onClick={() => void actions.handleEntryAction("rename", [entry])} />
           </Tooltip>
           <Tooltip title="删除">
-            <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => void handleDelete([record_])} />
+            <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => void actions.handleEntryAction("delete", [entry])} />
           </Tooltip>
         </Space>
       ),
@@ -470,111 +222,102 @@ export default function FileManager({ connectionId, initialPath }: Props) {
   ];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <Space wrap style={{ padding: "8px 0" }}>
-        <Button icon={<ArrowUpOutlined />} onClick={() => void load(path.split("/").slice(0, -1).join("/") || "/")}>
+    <div ref={measureRef} style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <Space wrap style={{ padding: "4px 0 8px" }}>
+        <Button
+          icon={<ArrowUpOutlined />}
+          onClick={() => void load(path.split("/").slice(0, -1).join("/") || "/")}
+        >
           上级
         </Button>
         <Input
           value={pathInput}
           onChange={(event) => setPathInput(event.target.value)}
           onPressEnter={() => void load(pathInput)}
-          style={{ width: 260 }}
+          style={{ width: isMobile ? 190 : 280 }}
           placeholder="/root"
         />
         <Button onClick={() => void load(pathInput)}>跳转</Button>
         <Button icon={<ReloadOutlined />} onClick={() => void load(path)} />
-        <Button icon={<FolderAddOutlined />} onClick={() => void handleMkdir()}>
+        <Button
+          icon={<BlockOutlined />}
+          onClick={() => {
+            runtime.openApp("files", { payload: { path }, newWindow: true, title: "文件管理 · " + path });
+          }}
+        >
+          新窗口
+        </Button>
+        <Button icon={<FolderAddOutlined />} onClick={() => void actions.handleBackgroundAction("newFolder", path)}>
           目录
         </Button>
-        <Button icon={<FileAddOutlined />} onClick={() => void handleCreateFile()}>
+        <Button icon={<FileAddOutlined />} onClick={() => void actions.handleBackgroundAction("newFile", path)}>
           文件
         </Button>
-        <Button icon={<UploadOutlined />} onClick={() => void handleUpload()}>
+        <Button icon={<UploadOutlined />} onClick={() => void actions.handleBackgroundAction("upload", path)}>
           上传
         </Button>
-        <Button icon={<DownloadOutlined />} disabled={!selected.length} onClick={() => void handleDownload(selectedEntries)}>
+        <Button icon={<DownloadOutlined />} disabled={!selectedEntries.length} onClick={() => void actions.handleEntryAction("download", selectedEntries)}>
           下载
         </Button>
-        <Button icon={<FileZipOutlined />} disabled={!selected.length} onClick={() => void handleCompress(selectedEntries)}>
+        <Button icon={<FileZipOutlined />} disabled={!selectedEntries.length} onClick={() => void actions.handleEntryAction("compress", selectedEntries)}>
           压缩
         </Button>
         <Button
           icon={<ScissorOutlined />}
-          disabled={!selected.some((p) => ARCHIVE_RE.test(p))}
-          onClick={() => {
-            const entry = selectedEntries.find((item) => ARCHIVE_RE.test(item.name));
-            if (entry) void handleExtract(entry);
-          }}
+          disabled={!selectedArchive}
+          onClick={() => selectedArchive && void actions.handleEntryAction("extract", [selectedArchive])}
         >
           解压
         </Button>
         <Dropdown
           menu={{
-            items: [
-              { key: "copy", label: "复制", icon: <CopyOutlined />, disabled: !selected.length },
-              { key: "cut", label: "剪切", icon: <ScissorOutlined />, disabled: !selected.length },
-              { key: "paste", label: "粘贴", disabled: !clipboard.current },
-              { key: "chmod", label: "权限管理", disabled: selected.length !== 1 },
-              { key: "desktop", label: "发送到桌面", disabled: !selected.length },
-              { type: "divider" },
-              { key: "delete", label: "删除", danger: true, disabled: !selected.length },
-            ],
+            items: moreItems,
             onClick: ({ key }) => {
-              if (key === "copy" || key === "cut") {
-                clipboard.current = { mode: key === "copy" ? "copy" : "cut", entries: selectedEntries };
-                message.success(key === "copy" ? "已复制到剪贴板" : "已剪切到剪贴板");
-              } else if (key === "paste") {
-                void handlePaste();
-              } else if (key === "chmod") {
-                void handleChmod(selectedEntries[0]);
-              } else if (key === "desktop") {
-                void handleShortcut(selectedEntries);
-              } else if (key === "delete") {
-                void handleDelete(selectedEntries);
+              if (key === "paste") {
+                void actions.handleBackgroundAction("paste", path);
+                return;
               }
+              void actions.handleEntryAction(key, key === "chmod" ? (selectedEntries.length ? selectedEntries : items.slice(0, 0)) : selectedEntries);
             },
           }}
         >
-          <Button>更多操作</Button>
+          <Button icon={<MoreOutlined />}>更多</Button>
         </Dropdown>
       </Space>
 
-      {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} /> : null}
-      {progress ? (
-        <Alert
-          type="info"
-          showIcon
-          message={progress.title}
-          description={progress.detail}
-          style={{ marginBottom: 12 }}
-        />
-      ) : null}
+      {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 10 }} /> : null}
 
-      <div style={{ flex: 1, minHeight: 0 }}>
+      <div
+        ref={tableRef}
+        style={{ flex: 1, minHeight: 0 }}
+        onContextMenu={showBackgroundMenu}
+      >
         <Table<RemoteFile>
           size="small"
           rowKey="path"
+          tableLayout="fixed"
           loading={loading}
           columns={columns}
           dataSource={items}
           pagination={false}
-          scroll={{ y: "calc(100vh - 460px)" }}
-          locale={{ emptyText: loading ? <Spin /> : <Empty description="目录为空" /> }}
+          scroll={{ y: tableHeight }}
+          locale={{ emptyText: loading ? <Spin /> : <Empty description="目录为空，右键可新建文件或上传" /> }}
           rowSelection={{
             selectedRowKeys: selected,
             onChange: (keys) => setSelected(keys as string[]),
           }}
-          onRow={(record_) => ({
-            onDoubleClick: () => {
-              if (record_.type === "directory") void load(record_.path);
-            },
+          onRow={(entry) => ({
+            onDoubleClick: () => openEntry(entry),
+            onContextMenu: (event) => showEntryMenu(event, entry),
           })}
         />
       </div>
-      <div className="muted" style={{ fontSize: 12, paddingTop: 8 }}>
-        {items.length} 个项目{selected.length ? `，已选择 ${selected.length} 个` : ""} · SFTP 安全通道
+      <div className="muted" style={{ fontSize: 12, paddingTop: 8, display: "flex", justifyContent: "space-between" }}>
+        <span>{items.length} 个项目{selected.length ? `，已选择 ${selected.length} 个` : ""} · SFTP 安全通道</span>
+        <span>{canPaste ? `剪贴板：${clipboard.entries.length} 项（${clipboard.mode === "cut" ? "剪切" : "复制"}）` : "右键打开完整操作菜单"}</span>
       </div>
+      <FileActionProgress progress={actions.progress} />
+      {menu.node}
     </div>
   );
 }

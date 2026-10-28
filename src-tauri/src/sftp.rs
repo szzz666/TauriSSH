@@ -82,6 +82,9 @@ pub async fn list_dir(sftp: &SftpSession, path: &str) -> AppResult<Vec<RemoteFil
             owner: attrs.uid.map(|v| v.to_string()).unwrap_or_default(),
             group: attrs.gid.map(|v| v.to_string()).unwrap_or_default(),
             modified: attrs.mtime.map(|v| v as u64).unwrap_or(0),
+            target: None,
+            target_type: None,
+            shortcut_path: None,
         });
     }
     entries.sort_by(|a, b| {

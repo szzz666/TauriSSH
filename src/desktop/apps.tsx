@@ -1,14 +1,17 @@
 import type { ReactNode } from "react";
 import {
-  CloudServerOutlined, CodeOutlined, DashboardOutlined, FileTextOutlined,
-  FolderOpenOutlined, HistoryOutlined, PlusOutlined, SettingOutlined,
+  BarChartOutlined, CloudDownloadOutlined, CodeOutlined, FileTextOutlined,
+  FolderOpenOutlined, HistoryOutlined, PlusOutlined, SafetyCertificateOutlined,
+  SettingOutlined, SyncOutlined,
 } from "@ant-design/icons";
 
 export type AppId =
   | "terminal"
   | "files"
   | "monitor"
-  | "screen"
+  | "firewall"
+  | "sources"
+  | "systemtime"
   | "history"
   | "settings"
   | "editor"
@@ -43,19 +46,35 @@ export const APPS: Record<AppId, AppMeta> = {
   },
   monitor: {
     id: "monitor",
-    label: "资源监控",
-    hint: "CPU / 内存 / 磁盘",
-    icon: <CloudServerOutlined />,
+    label: "任务管理器",
+    hint: "进程 / 性能 / 服务",
+    icon: <BarChartOutlined />,
     accent: "#52c41a",
     background: "linear-gradient(135deg, #059669, #34d399)",
   },
-  screen: {
-    id: "screen",
-    label: "后台会话",
-    hint: "GNU Screen 任务",
-    icon: <DashboardOutlined />,
-    accent: "#722ed1",
-    background: "linear-gradient(135deg, #7c3aed, #a78bfa)",
+  firewall: {
+    id: "firewall",
+    label: "防火墙策略",
+    hint: "默认拒绝入站，按需放行",
+    icon: <SafetyCertificateOutlined />,
+    accent: "#dc2626",
+    background: "linear-gradient(135deg, #b91c1c, #f97316)",
+  },
+  sources: {
+    id: "sources",
+    label: "软件源",
+    hint: "国内镜像加速",
+    icon: <CloudDownloadOutlined />,
+    accent: "#0891b2",
+    background: "linear-gradient(135deg, #2563eb, #06b6d4)",
+  },
+  systemtime: {
+    id: "systemtime",
+    label: "系统时间",
+    hint: "NTP 同步与时区",
+    icon: <SyncOutlined />,
+    accent: "#16a34a",
+    background: "linear-gradient(135deg, #0f766e, #22c55e)",
   },
   history: {
     id: "history",
@@ -92,10 +111,9 @@ export const APPS: Record<AppId, AppMeta> = {
 };
 
 /** 桌面图标顺序（编辑器与连接不常驻桌面，连接单独放在末尾）。 */
-export const DESKTOP_APPS: AppId[] = ["terminal", "files", "monitor", "screen", "history", "settings"];
-
-/** Dock / 移动端主屏停靠栏。 */
-export const DOCK_APPS: AppId[] = ["terminal", "files", "monitor", "settings"];
+export const DESKTOP_APPS: AppId[] = [
+  "terminal", "files", "monitor", "firewall", "sources", "systemtime", "history", "settings",
+];
 
 export interface WindowGeometry {
   width: number;
@@ -103,13 +121,15 @@ export interface WindowGeometry {
 }
 
 export const DEFAULT_GEOMETRY: Record<AppId, WindowGeometry> = {
-  terminal: { width: 900, height: 560 },
-  files: { width: 880, height: 560 },
-  monitor: { width: 840, height: 580 },
-  screen: { width: 720, height: 520 },
-  history: { width: 780, height: 520 },
-  settings: { width: 720, height: 560 },
-  editor: { width: 880, height: 600 },
+  terminal: { width: 960, height: 600 },
+  files: { width: 1120, height: 660 },
+  monitor: { width: 1120, height: 720 },
+  firewall: { width: 1080, height: 700 },
+  sources: { width: 1040, height: 680 },
+  systemtime: { width: 1040, height: 700 },
+  history: { width: 900, height: 560 },
+  settings: { width: 820, height: 600 },
+  editor: { width: 960, height: 620 },
   connect: { width: 0, height: 0 },
 };
 

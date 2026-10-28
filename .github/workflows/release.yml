@@ -1,13 +1,21 @@
 name: Release
 
+# 每次提交自动发布：
+#   - push 到 main：自动递增补丁号并发布 prerelease（v0.1.1-dev.<run>）
+#   - push vX.Y.Z 标签 / 手动指定版本：发布正式版
+# 三条路径都会构建 macOS(Apple Silicon / Intel)、Windows x64、Linux x64、Android、iOS 并上传到同一个 Release。
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
   workflow_dispatch:
     inputs:
       version:
-        description: "发布版本号（例如 0.1.0），留空则使用 tauri.conf.json 中的版本"
+        description: "指定版本号（例如 0.1.0）；留空则按最近标签自动递增"
         required: false
         type: string
 
@@ -19,144 +27,147 @@ env:
   CARGO_TERM_COLOR: always
   NODE_VERSION: "22"
   RUST_VERSION: "stable"
+  # 与 src-tauri/gen/android/app/build.gradle.kts 中的 compileSdk / ndkVersion 保持一致
+  ANDROID_COMPILE_SDK: "36"
+  ANDROID_BUILD_TOOLS: "36.0.0"
+  ANDROID_NDK_VERSION: "27.2.12479018"
 
 permissions:
   contents: write
 
 jobs:
-  create-release:
-    name: 创建 Release 草稿
+  prepare:
+    name: 计算版本并创建 Release
     runs-on: ubuntu-22.04
     outputs:
-      release_id: ${{ steps.create.outputs.release_id }}
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      version_code: ${{ steps.version.outputs.version_code }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      release_id: ${{ steps.create.outputs.release_id }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: 解析版本号
         id: version
         shell: bash
         run: |
           set -euo pipefail
           input="${{ inputs.version }}"
-          if [ -n "$input" ]; then
+
+          if [ -n "${input:-}" ]; then
             version="${input#v}"
+            prerelease=false
           elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             version="${GITHUB_REF_NAME#v}"
+            prerelease=false
           else
-            version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+            # 常规提交：在最近标签基础上递增补丁号，并附加 run number 保证唯一且递增
+            base="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+            base="${base#v}"
+            if [ -z "$base" ]; then
+              base="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+            fi
+            major="$(echo "$base" | cut -d. -f1)"
+            minor="$(echo "$base" | cut -d. -f2)"
+            patch="$(echo "$base" | cut -d. -f3 | cut -d- -f1)"
+            version="${major:-0}.${minor:-0}.$(( ${patch:-0} + 1 ))-dev.${GITHUB_RUN_NUMBER}"
+            prerelease=true
           fi
+
+          # Android versionCode 必须是递增整数，且 <= 2100000000
+          version_code="$(( GITHUB_RUN_NUMBER + 1000 ))"
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "发布版本：$version"
-      - name: 写入版本号
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
-          node -e "
-            const fs = require('fs');
-            for (const file of ['package.json', 'src-tauri/tauri.conf.json']) {
-              const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-              data.version = process.env.VERSION;
-              fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\\n');
-            }
-          " 
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-      - name: 创建 GitHub Release
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "版本：$version ｜ versionCode：$version_code ｜ prerelease：$prerelease"
+
+      - name: 创建或复用 Release
         id: create
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
-          release_id="$(gh api repos/${{ github.repository }}/releases \
-            --method POST \
-            --field tag_name="v$version" \
-            --field name="TauriSSH v$version" \
-            --field draft=true \
-            --field prerelease=false \
-            --field generate_release_notes=true \
-            --jq '.id')"
-          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
-          echo "已创建 Release ID：$release_id"
+          tag="${{ steps.version.outputs.tag }}"
+          existing="$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq '.id' 2>/dev/null || true)"
+          if [ -n "$existing" ]; then
+            echo "release_id=$existing" >> "$GITHUB_OUTPUT"
+            echo "复用已有 Release $tag（ID $existing）"
+          else
+            # -F 会按类型发送布尔值；--field 会把 true 当字符串，导致 422
+            release_id="$(gh api "repos/${{ github.repository }}/releases" \
+              --method POST \
+              -f tag_name="$tag" \
+              -f name="TauriSSH $tag" \
+              -F draft=true \
+              -F prerelease="${{ steps.version.outputs.prerelease }}" \
+              -F generate_release_notes=true \
+              --jq '.id')"
+            echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+            echo "已创建 Release $tag（ID $release_id）"
+          fi
 
   build-desktop:
-    name: 构建桌面端 (${{ matrix.name }})
-    needs: create-release
+    name: 桌面端 ${{ matrix.name }}
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: macOS-Apple-Silicon
+          - name: macOS Apple Silicon
             platform: macos-latest
             target: aarch64-apple-darwin
             bundles: app,dmg
-          - name: macOS-Intel
+          - name: macOS Intel
             platform: macos-15-intel
             target: x86_64-apple-darwin
             bundles: app,dmg
-          - name: Windows-x64
+          - name: Windows x64
             platform: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis,msi
-          - name: Linux-x64
+          - name: Linux x64
             platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             bundles: appimage,deb
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
-      - name: 同步版本号
-        shell: bash
-        run: |
-          set -euo pipefail
-          node -e "
-            const fs = require('fs');
-            for (const file of ['package.json', 'src-tauri/tauri.conf.json']) {
-              const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-              data.version = process.env.VERSION;
-              fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\\n');
-            }
-          "
-        env:
-          VERSION: ${{ needs.create-release.outputs.version }}
+
       - name: 安装 Linux 系统依赖
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libfuse2
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libssl-dev libfuse2 file
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
           key: ${{ matrix.target }}
+
       - name: 安装前端依赖
         run: npm ci
-      - name: 构建并上传到 Release
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
-  build-android:
-    name: 构建 Android
-    needs: create-release
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: 同步版本号
+      - name: 写入版本号
         shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           node -e "
@@ -164,32 +175,65 @@ jobs:
             for (const file of ['package.json', 'src-tauri/tauri.conf.json']) {
               const data = JSON.parse(fs.readFileSync(file, 'utf8'));
               data.version = process.env.VERSION;
-              fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\\n');
+              fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
             }
           "
+
+      - name: 构建并上传
+        uses: tauri-apps/tauri-action@v0
         env:
-          VERSION: ${{ needs.create-release.outputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 以下均为可选：未配置时产出未签名的包
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+  build-android:
+    name: Android
+    needs: prepare
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
+
       - name: 安装 Android SDK 与 NDK
         uses: android-actions/setup-android@v3
         with:
-          packages: "platform-tools platforms;android-34 build-tools;34.0.0 ndk;26.1.10909125"
+          packages: >-
+            platform-tools
+            platforms;android-${{ env.ANDROID_COMPILE_SDK }}
+            build-tools;${{ env.ANDROID_BUILD_TOOLS }}
+            ndk;${{ env.ANDROID_NDK_VERSION }}
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
           key: android
+
       - name: 安装前端依赖
         run: npm ci
+
       - name: 初始化 Android 工程
         env:
           CI: "true"
@@ -199,151 +243,202 @@ jobs:
           else
             echo "已存在 Android 工程，跳过初始化"
           fi
-      - name: 构建 APK（arm64 + armv7）
-        env:
-          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
-          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
-        run: |
-          npx tauri android build --apk --target aarch64 armv7
-      - name: 构建 AAB（Play 商店）
-        env:
-          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
-          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
-        run: |
-          npx tauri android build --aab --target aarch64 armv7
-      - name: 收集构建产物
+
+      - name: 准备签名密钥库
         shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          version="${{ needs.create-release.outputs.version }}"
+          keystore="$RUNNER_TEMP/release.keystore"
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$keystore"
+            pass="$ANDROID_KEYSTORE_PASSWORD"
+            alias="${ANDROID_KEY_ALIAS:-taurissh}"
+            key_pass="${ANDROID_KEY_PASSWORD:-$pass}"
+            echo "使用仓库配置的发布密钥库"
+          else
+            # 未配置密钥时生成一次性密钥库，保证 APK 已签名、可直接安装
+            pass="taurissh-ci"
+            alias="taurissh"
+            key_pass="$pass"
+            keytool -genkeypair -v -keystore "$keystore" \
+              -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$pass" -keypass "$key_pass" \
+              -dname "CN=TauriSSH CI, OU=CI, O=TauriSSH, L=CI, S=CI, C=CN" > /dev/null
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，已生成临时签名密钥（不同构建之间签名不一致，无法覆盖安装）"
+          fi
+          {
+            echo "ANDROID_KEYSTORE_PATH=$keystore"
+            echo "ANDROID_KEYSTORE_PASSWORD=$pass"
+            echo "ANDROID_KEY_ALIAS=$alias"
+            echo "ANDROID_KEY_PASSWORD=$key_pass"
+          } >> "$GITHUB_ENV"
+
+      - name: 构建 APK（按 ABI 拆分）
+        env:
+          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          VERSION_CODE: ${{ needs.prepare.outputs.version_code }}
+        run: |
+          # versionName 必须是纯语义化版本，dev 后缀会破坏 Android 版本解析
+          version="${VERSION%%-*}"
+          npx tauri android build --apk --split-per-abi --target aarch64 armv7 \
+            --config "{\"version\":\"$version\",\"bundle\":{\"android\":{\"versionCode\":$VERSION_CODE}}}"
+
+      - name: 构建 AAB（Google Play）
+        env:
+          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          VERSION_CODE: ${{ needs.prepare.outputs.version_code }}
+        run: |
+          version="${VERSION%%-*}"
+          npx tauri android build --aab --target aarch64 armv7 \
+            --config "{\"version\":\"$version\",\"bundle\":{\"android\":{\"versionCode\":$VERSION_CODE}}}"
+
+      - name: 收集 Android 产物
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
           mkdir -p artifacts
-          find src-tauri/gen/android/app/build/outputs -type f \( -name "*.apk" -o -name "*.aab" \) | while read -r file; do
-            base="$(basename "$file")"
-            cp "$file" "artifacts/TauriSSH-${version}-${base}"
+          # 产物路径形如 apk/<abi>/release/app-<abi>-release.apk，取 apk 之后的第一段作为 ABI
+          find src-tauri/gen/android/app/build/outputs/apk -name "*-release.apk" | while read -r file; do
+            abi="$(echo "$file" | sed -E 's#.*/outputs/apk/([^/]+)/.*#\1#')"
+            cp "$file" "artifacts/TauriSSH-${VERSION}-android-${abi}.apk"
           done
+          find src-tauri/gen/android/app/build/outputs/bundle -name "*.aab" | while read -r file; do
+            cp "$file" "artifacts/TauriSSH-${VERSION}-android.aab"
+          done
+          if [ -z "$(ls -A artifacts 2>/dev/null)" ]; then
+            echo "::error::未找到 Android 构建产物"
+            find src-tauri/gen/android/app/build/outputs -type f || true
+            exit 1
+          fi
           ls -la artifacts
-      - name: 上传 APK/AAB 到 Release
+
+      - name: 上传 Android 产物
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          tag="v${{ needs.create-release.outputs.version }}"
+          tag="${{ needs.prepare.outputs.tag }}"
           for file in artifacts/*; do
             gh release upload "$tag" "$file" --repo "${{ github.repository }}" --clobber
           done
 
   build-ios:
-    name: 构建 iOS
-    needs: create-release
+    name: iOS
+    needs: prepare
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 同步版本号
-        shell: bash
-        run: |
-          set -euo pipefail
-          node -e "
-            const fs = require('fs');
-            for (const file of ['package.json', 'src-tauri/tauri.conf.json']) {
-              const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-              data.version = process.env.VERSION;
-              fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\\n');
-            }
-          "
-        env:
-          VERSION: ${{ needs.create-release.outputs.version }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+          targets: aarch64-apple-ios
+
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
           key: ios
+
       - name: 安装前端依赖
         run: npm ci
-      - name: 配置 iOS 开发团队
-        shell: bash
-        env:
-          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
-        run: |
-          set -euo pipefail
-          if [ -z "${APPLE_DEVELOPMENT_TEAM:-}" ]; then
-            echo "::warning::未提供 APPLE_DEVELOPMENT_TEAM，iOS 将尝试无签名构建"
-            exit 0
-          fi
-          node -e "
-            const fs = require('fs');
-            const file = 'src-tauri/tauri.conf.json';
-            const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-            data.bundle = data.bundle || {};
-            data.bundle.iOS = { ...(data.bundle.iOS || {}), developmentTeam: process.env.APPLE_DEVELOPMENT_TEAM };
-            fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n');
-          "
+
       - name: 初始化 iOS 工程
         env:
           CI: "true"
-          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
         run: |
           if [ ! -d src-tauri/gen/apple ]; then
-            npx tauri ios init --ci || {
-              echo "::warning::iOS 工程初始化失败（需要 Apple 开发者团队），跳过 iOS 构建"
-              echo "IOS_BUILD_FAILED=1" >> "$GITHUB_ENV"
-            }
+            npx tauri ios init --ci
           else
             echo "已存在 iOS 工程，跳过初始化"
           fi
-      - name: 构建 .app
-        if: env.IOS_BUILD_FAILED != '1'
-        env:
-          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
-        run: |
-          npx tauri ios build --target aarch64 --ci --no-sign || {
-            echo "::warning::iOS 构建失败（需要 Apple 开发者证书或描述文件），跳过产物上传"
-            echo "IOS_BUILD_FAILED=1" >> "$GITHUB_ENV"
-          }
-      - name: 打包未签名 IPA
-        if: env.IOS_BUILD_FAILED != '1'
+
+      - name: 构建 .ipa
         shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          version="${{ needs.create-release.outputs.version }}"
+          version="${VERSION%%-*}"
+          # 无 Apple 开发者证书时使用 --no-sign，产出可自签侧载的 ipa
+          npx tauri ios build --target aarch64 --ci --no-sign \
+            --config "{\"version\":\"$version\"}"
+
+      - name: 打包 IPA
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
           mkdir -p artifacts
-          app_path="$(find src-tauri/gen/apple/build -name "*.app" -maxdepth 4 | head -n 1)"
-          echo "APP=$app_path"
-          mkdir -p "artifacts/Payload"
-          cp -R "$app_path" "artifacts/Payload/"
-          (cd artifacts && zip -qry "TauriSSH-${version}-ios-unsigned.ipa" Payload)
-          rm -rf artifacts/Payload
+          ipa="$(find src-tauri/gen/apple/build -name '*.ipa' | head -n 1 || true)"
+          if [ -n "$ipa" ]; then
+            cp "$ipa" "artifacts/TauriSSH-${VERSION}-ios.ipa"
+          else
+            app="$(find src-tauri/gen/apple/build -name '*.app' | head -n 1 || true)"
+            if [ -z "$app" ]; then
+              echo "::error::未找到 iOS 构建产物"
+              find src-tauri/gen/apple/build -maxdepth 4 || true
+              exit 1
+            fi
+            mkdir -p artifacts/Payload
+            cp -R "$app" artifacts/Payload/
+            (cd artifacts && zip -qry "TauriSSH-${VERSION}-ios.ipa" Payload)
+            rm -rf artifacts/Payload
+          fi
           ls -la artifacts
-      - name: 上传 iOS 产物到 Release
-        if: env.IOS_BUILD_FAILED != '1'
+
+      - name: 上传 iOS 产物
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          tag="v${{ needs.create-release.outputs.version }}"
+          tag="${{ needs.prepare.outputs.tag }}"
           for file in artifacts/*; do
             gh release upload "$tag" "$file" --repo "${{ github.repository }}" --clobber
           done
 
-  publish-release:
-    name: 发布 Release
-    needs: [create-release, build-desktop, build-android, build-ios]
-    if: always() && needs.create-release.result == 'success'
+  publish:
+    name: 结束草稿并发布
+    needs: [prepare, build-desktop, build-android, build-ios]
+    if: always() && needs.prepare.result == 'success'
     runs-on: ubuntu-22.04
     steps:
-      - name: 结束草稿状态
+      - name: 检查各平台结果
+        shell: bash
+        run: |
+          echo "桌面端：${{ needs.build-desktop.result }}"
+          echo "Android：${{ needs.build-android.result }}"
+          echo "iOS：${{ needs.build-ios.result }}"
+          if [ "${{ needs.build-desktop.result }}" != "success" ] && \
+             [ "${{ needs.build-android.result }}" != "success" ] && \
+             [ "${{ needs.build-ios.result }}" != "success" ]; then
+            echo "::error::所有平台均构建失败，保留草稿以便排查"
+            exit 1
+          fi
+
+      - name: 发布 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          version="${{ needs.create-release.outputs.version }}"
-          gh api "repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }}" \
-            --method PATCH --field draft=false --field tag_name="v$version"
-          echo "Release v$version 已发布：${{ github.server_url }}/${{ github.repository }}/releases/tag/v$version"
+          tag="${{ needs.prepare.outputs.tag }}"
+          gh api "repos/${{ github.repository }}/releases/${{ needs.prepare.outputs.release_id }}" \
+            --method PATCH -F draft=false -f tag_name="$tag"
+          echo "已发布：${{ github.server_url }}/${{ github.repository }}/releases/tag/$tag"

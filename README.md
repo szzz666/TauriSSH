@@ -8,12 +8,16 @@
 
 - SSH 密码 / PEM / OpenSSH 私钥认证，连接前展示并确认主机指纹（SHA256）
 - 基于 xterm.js 的交互式终端，PTY 尺寸同步、字号调节、自动重连
-- GNU Screen 后台会话：创建、列表轮询、挂载、终止
-- SFTP 文件管理：浏览、上传、下载、新建、重命名、复制、移动、删除、权限修改
+- GNU Screen 后台会话：创建、列表轮询、挂载、终止；会话图标集成在 Dock 中，不再占用独立窗口
+- Dock 仅显示最小化窗口与后台 Screen 会话，减少窗口切换噪音
+- 任务管理器：进程结束 / 强制结束、CPU / 内存 / 磁盘 / 网络性能曲线；统一“服务”页管理 systemd 服务与开机启动，并支持在 UI 中创建自定义服务
+- 防火墙策略：支持 UFW / firewalld，默认拒绝入站、按需放行 SSH / HTTP / HTTPS 与自定义端口
+- 软件源配置：阿里云、腾讯云、清华、中科大、华为云镜像一键切换，自动备份原配置
+- 系统时间：chrony 安装与启停、NTP 服务器配置、立即校准、chronyc tracking，以及 timedatectl 时区设置与常用时区快捷切换
+- SFTP 文件管理：浏览、上传、目录打包下载、新建、重命名、复制、移动、删除、权限修改，完整右键菜单
 - 在线文本编辑（UTF-8，≤ 2 MiB，Ctrl/Cmd+S 保存）
 - 压缩解压：.tar.gz / .tgz / .zip / 单文件 .gz，异步任务 + 轮询进度
-- 资源监控：CPU、内存、Swap、根分区、负载、运行时间、进程数、累计收发，含 20 次采样趋势图
-- 远程桌面快捷方式（`$HOME/.webssh/desktop`）
+- 远程桌面快捷方式（`$HOME/.webssh/desktop`）：图标可拖动、自动吸附，位置保存到服务器 `.webssh/desktop-layout.json`
 - 连接配置、操作历史（最近 150 条，可筛选/复制/导出 CSV）、主题（浅色/深色/跟随系统）
 - 响应式界面：≤767px 或触屏设备自动切换为移动端布局
 
@@ -93,23 +97,46 @@ adb shell "/data/local/tmp/android_ssh_smoke 127.0.0.1 2222 $USER /data/local/tm
 
 ## 自动发布
 
-`.github/workflows/release.yml` 在推送 `v*` 标签或手动触发时：
+`.github/workflows/release.yml` **每次向 `main` 提交都会自动产出六个平台的安装包并发布到 Releases**，无需手动打标签。
 
-1. 创建 GitHub Release 草稿并同步版本号
-2. 并行构建 macOS (Apple Silicon)、macOS (Intel)、Windows x64、Linux x64
-3. 构建 Android APK（arm64 / armv7）与 AAB
-4. 构建 iOS 未签名 .ipa（如需签名，配置下方的 Secrets）
-5. 上传全部产物并结束草稿状态
+| 触发方式 | 版本号 | Release 类型 |
+| --- | --- | --- |
+| push 到 `main` | 最近标签递增补丁号 + `-dev.<run>`，如 `v0.1.1-dev.42` | 预发布（prerelease） |
+| push `vX.Y.Z` 标签 | 标签版本，如 `v0.1.0` | 正式版 |
+| 手动触发并填写版本 | 填写的版本 | 正式版 |
 
-可选 Secrets：
+每次运行会并行构建并上传：
+
+| 平台 | 产物 |
+| --- | --- |
+| macOS (Apple Silicon) | `.dmg` + `.app` |
+| macOS (Intel) | `.dmg` + `.app` |
+| Windows x64 | `.exe`（NSIS）+ `.msi` |
+| Linux x64 | `.AppImage` + `.deb` |
+| Android | 按 ABI 拆分的 `.apk`（arm64 / armv7）+ `.aab` |
+| iOS | 未签名 `.ipa`（可自签侧载） |
+
+版本号同时写入 `package.json`、`tauri.conf.json` 与 Android 的 `versionName` / `versionCode`（`versionCode` 取 run number，保证每次构建递增）。
+
+> 提交信息里带 `[skip ci]` 或只改动 Markdown / LICENSE / .gitignore 时不会触发发布。
+
+可选 Secrets（不配置也能出包，只是未签名）：
 
 | Secret | 说明 |
 | --- | --- |
 | `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 自动更新签名密钥 |
 | `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` / `APPLE_SIGNING_IDENTITY` / `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | macOS 代码签名与公证 |
-| `APPLE_MOBILE_PROVISION_PROFILE` / `KEYCHAIN_PASSWORD` | iOS 签名与描述文件 |
+| `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` | Android 发布签名；未配置时 CI 生成一次性密钥，APK 可安装但无法相互覆盖升级 |
 
-发布示例：
+生成 Android 密钥库并转为 Base64：
+
+```bash
+keytool -genkeypair -v -keystore release.keystore -alias taurissh \
+  -keyalg RSA -keysize 2048 -validity 10000
+base64 -i release.keystore -o keystore.b64   # 写入 ANDROID_KEYSTORE_BASE64
+```
+
+手动发布正式版：
 
 ```bash
 git tag v0.1.0
@@ -124,7 +151,7 @@ TauriSSH/
 │  ├─ App.tsx                # 应用外壳与视图切换
 │  ├─ api.ts                 # Tauri 命令封装
 │  ├─ store.ts               # 设置 / 连接 / 历史持久化
-│  └─ components/            # 终端、文件、编辑、监控、后台、记录
+│  └─ components/            # 终端、文件、编辑、任务管理器、系统运维、记录
 ├─ src-tauri/
 │  ├─ src/ssh.rs             # SSH 连接与终端通道
 │  ├─ src/sftp.rs            # SFTP 操作

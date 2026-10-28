@@ -1,9 +1,11 @@
 mod commands;
+mod commands_sysadmin;
 pub mod harness;
 pub mod model;
 pub mod remote;
 pub mod sftp;
 mod ssh;
+pub mod sysadmin;
 
 use std::sync::Arc;
 

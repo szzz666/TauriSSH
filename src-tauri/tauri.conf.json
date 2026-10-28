@@ -37,7 +37,7 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "跨平台 SSH 工作台",
-    "longDescription": "TauriSSH 是基于 Tauri 与 Ant Design 的跨平台 SSH 工作台，提供终端、SFTP 文件管理、Screen 后台会话与资源监控。",
+    "longDescription": "TauriSSH 是基于 Tauri 与 Ant Design 的跨平台 SSH 工作台，提供终端、SFTP 文件管理、任务管理器、防火墙、软件源、时间同步、时区与 systemd 开机启动项管理。",
     "macOS": {
       "minimumSystemVersion": "10.15"
     },
