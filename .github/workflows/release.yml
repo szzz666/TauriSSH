@@ -93,26 +93,52 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          IS_PRE: ${{ steps.version.outputs.prerelease }}
         run: |
           set -euo pipefail
-          tag="${{ steps.version.outputs.tag }}"
-          existing="$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq '.id' 2>/dev/null || true)"
-          if [ -n "$existing" ]; then
+          api="https://api.github.com/repos/${{ github.repository }}/releases"
+          auth="Authorization: Bearer $GH_TOKEN"
+
+          # 注意：gh api 失败时会把错误 JSON 写到 stdout，直接捕获会拿到
+          # {"message":"Not Found"...} 并被误判成“已存在”。这里只看 HTTP 状态码。
+          status="$(curl -s -o /tmp/existing.json -w '%{http_code}' \
+            -H "$auth" -H "Accept: application/vnd.github+json" "$api/tags/$TAG")"
+
+          if [ "$status" = "200" ]; then
+            existing="$(node -p "require('/tmp/existing.json').id")"
             echo "release_id=$existing" >> "$GITHUB_OUTPUT"
-            echo "复用已有 Release $tag（ID $existing）"
-          else
-            # -F 会按类型发送布尔值；--field 会把 true 当字符串，导致 422
-            release_id="$(gh api "repos/${{ github.repository }}/releases" \
-              --method POST \
-              -f tag_name="$tag" \
-              -f name="TauriSSH $tag" \
-              -F draft=true \
-              -F prerelease="${{ steps.version.outputs.prerelease }}" \
-              -F generate_release_notes=true \
-              --jq '.id')"
+            echo "复用已有 Release $TAG（ID $existing）"
+          elif [ "$status" = "404" ]; then
+            node -e "
+              const fs = require('fs');
+              console.log(JSON.stringify({
+                tag_name: process.env.TAG,
+                name: 'TauriSSH ' + process.env.TAG,
+                draft: true,
+                prerelease: process.env.IS_PRE === 'true',
+                generate_release_notes: true,
+              }));
+            " > /tmp/new-release.json
+            curl -s -X POST -H "$auth" -H "Accept: application/vnd.github+json" \
+              --data @/tmp/new-release.json "$api" -o /tmp/created.json -w '%{http_code}' > /tmp/create-status.txt
+            release_id="$(node -e "
+              const status = require('fs').readFileSync('/tmp/create-status.txt','utf8').trim();
+              const body = JSON.parse(require('fs').readFileSync('/tmp/created.json','utf8'));
+              if (status !== '201' || !body.id) {
+                console.error('创建 Release 失败 (HTTP ' + status + '): ' + JSON.stringify(body));
+                process.exit(1);
+              }
+              console.log(body.id);
+            ")"
             echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
-            echo "已创建 Release $tag（ID $release_id）"
+            echo "已创建 Release $TAG（ID $release_id）"
+          else
+            echo "::error::查询 Release 失败（HTTP $status）"
+            cat /tmp/existing.json
+            exit 1
           fi
+          rm -f /tmp/existing.json /tmp/new-release.json /tmp/created.json /tmp/create-status.txt
 
   build-desktop:
     name: 桌面端 ${{ matrix.name }}
