@@ -28,6 +28,7 @@ env:
   NODE_VERSION: "22"
   RUST_VERSION: "stable"
   # 与 src-tauri/gen/android/app/build.gradle.kts 中的 compileSdk / ndkVersion 保持一致
+  ANDROID_SDK_ROOT: "/usr/local/lib/android/sdk"
   ANDROID_COMPILE_SDK: "36"
   ANDROID_BUILD_TOOLS: "36.0.0"
   ANDROID_NDK_VERSION: "27.2.12479018"
@@ -73,7 +74,8 @@ jobs:
             major="$(echo "$base" | cut -d. -f1)"
             minor="$(echo "$base" | cut -d. -f2)"
             patch="$(echo "$base" | cut -d. -f3 | cut -d- -f1)"
-            version="${major:-0}.${minor:-0}.$(( ${patch:-0} + 1 ))-dev.${GITHUB_RUN_NUMBER}"
+            # 预发布标识必须纯数字：WiX(MSI) 只接受数字且 <= 65535，写 dev.1 会直接失败
+            version="${major:-0}.${minor:-0}.$(( ${patch:-0} + 1 ))-${GITHUB_RUN_NUMBER}"
             prerelease=true
           fi
 
@@ -123,6 +125,8 @@ jobs:
             platform: macos-latest
             target: aarch64-apple-darwin
             bundles: app,dmg
+            # 同一个 macOS runner 顺带产出 iOS 包，避免额外排队等待 macos-latest
+            ios: true
           - name: macOS Intel
             platform: macos-15-intel
             target: x86_64-apple-darwin
@@ -179,22 +183,98 @@ jobs:
             }
           "
 
-      - name: 构建并上传
-        uses: tauri-apps/tauri-action@v0
+      # 未配置签名凭据时必须完全不导出这些变量：
+      # 空字符串会让 Tauri 判定为“要签名”，进而尝试导入不存在的 .p12 而报错
+      - name: 注入可选签名凭据
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 以下均为可选：未配置时产出未签名的包
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          injected=0
+          while IFS='=' read -r key value; do
+            if [ -n "${value:-}" ]; then
+              # 多行值（.p12 的 base64 可能换行）用分隔符写入 GITHUB_ENV
+              {
+                echo "${key}<<__SIGN_EOF__"
+                printf '%s\n' "$value"
+                echo "__SIGN_EOF__"
+              } >> "$GITHUB_ENV"
+              injected=$((injected + 1))
+            fi
+          done <<< "$(env | grep -E '^(APPLE_|TAURI_SIGNING_)' || true)"
+          echo "已注入 $injected 个签名变量（0 表示走未签名构建）"
+
+      - name: 构建并上传
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: 安装 iOS Rust 目标
+        if: matrix.ios
+        run: rustup target add aarch64-apple-ios
+
+      - name: 初始化 iOS 工程
+        if: matrix.ios
+        env:
+          CI: "true"
+        run: |
+          if [ ! -d src-tauri/gen/apple ]; then
+            npx tauri ios init --ci
+          else
+            echo "已存在 iOS 工程，跳过初始化"
+          fi
+
+      - name: 构建未签名 .ipa
+        if: matrix.ios
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          version="${VERSION%%-*}"
+          npx tauri ios build --target aarch64 --ci --no-sign \
+            --config "{\"version\":\"$version\"}"
+
+      - name: 打包并上传 IPA
+        if: matrix.ios
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p ios-artifacts
+          ipa="$(find src-tauri/gen/apple/build -name '*.ipa' | head -n 1 || true)"
+          if [ -n "$ipa" ]; then
+            cp "$ipa" "ios-artifacts/TauriSSH-${VERSION}-ios.ipa"
+          else
+            app="$(find src-tauri/gen/apple/build -name '*.app' | head -n 1 || true)"
+            if [ -z "$app" ]; then
+              echo "::error::未找到 iOS 构建产物"
+              find src-tauri/gen/apple/build -maxdepth 4 || true
+              exit 1
+            fi
+            mkdir -p ios-artifacts/Payload
+            cp -R "$app" ios-artifacts/Payload/
+            (cd ios-artifacts && zip -qry "TauriSSH-${VERSION}-ios.ipa" Payload)
+            rm -rf ios-artifacts/Payload
+          fi
+          ls -la ios-artifacts
+          tag="${{ needs.prepare.outputs.tag }}"
+          for file in ios-artifacts/*; do
+            gh release upload "$tag" "$file" --repo "${{ github.repository }}" --clobber
+          done
 
   build-android:
     name: Android
@@ -280,7 +360,8 @@ jobs:
 
       - name: 构建 APK（按 ABI 拆分）
         env:
-          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          # 不要导出空的 NDK_HOME：tauri 见到该变量为空会直接报 "Android NDK invalid"，
+          # 未设置时它会自己从 $ANDROID_HOME/ndk 里挑版本
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
           VERSION: ${{ needs.prepare.outputs.version }}
           VERSION_CODE: ${{ needs.prepare.outputs.version_code }}
@@ -292,7 +373,6 @@ jobs:
 
       - name: 构建 AAB（Google Play）
         env:
-          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
           VERSION: ${{ needs.prepare.outputs.version }}
           VERSION_CODE: ${{ needs.prepare.outputs.version_code }}
@@ -334,101 +414,19 @@ jobs:
             gh release upload "$tag" "$file" --repo "${{ github.repository }}" --clobber
           done
 
-  build-ios:
-    name: iOS
-    needs: prepare
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
-          key: ios
-
-      - name: 安装前端依赖
-        run: npm ci
-
-      - name: 初始化 iOS 工程
-        env:
-          CI: "true"
-        run: |
-          if [ ! -d src-tauri/gen/apple ]; then
-            npx tauri ios init --ci
-          else
-            echo "已存在 iOS 工程，跳过初始化"
-          fi
-
-      - name: 构建 .ipa
-        shell: bash
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          version="${VERSION%%-*}"
-          # 无 Apple 开发者证书时使用 --no-sign，产出可自签侧载的 ipa
-          npx tauri ios build --target aarch64 --ci --no-sign \
-            --config "{\"version\":\"$version\"}"
-
-      - name: 打包 IPA
-        shell: bash
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts
-          ipa="$(find src-tauri/gen/apple/build -name '*.ipa' | head -n 1 || true)"
-          if [ -n "$ipa" ]; then
-            cp "$ipa" "artifacts/TauriSSH-${VERSION}-ios.ipa"
-          else
-            app="$(find src-tauri/gen/apple/build -name '*.app' | head -n 1 || true)"
-            if [ -z "$app" ]; then
-              echo "::error::未找到 iOS 构建产物"
-              find src-tauri/gen/apple/build -maxdepth 4 || true
-              exit 1
-            fi
-            mkdir -p artifacts/Payload
-            cp -R "$app" artifacts/Payload/
-            (cd artifacts && zip -qry "TauriSSH-${VERSION}-ios.ipa" Payload)
-            rm -rf artifacts/Payload
-          fi
-          ls -la artifacts
-
-      - name: 上传 iOS 产物
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          tag="${{ needs.prepare.outputs.tag }}"
-          for file in artifacts/*; do
-            gh release upload "$tag" "$file" --repo "${{ github.repository }}" --clobber
-          done
-
   publish:
     name: 结束草稿并发布
-    needs: [prepare, build-desktop, build-android, build-ios]
+    needs: [prepare, build-desktop, build-android]
     if: always() && needs.prepare.result == 'success'
     runs-on: ubuntu-22.04
     steps:
       - name: 检查各平台结果
         shell: bash
         run: |
-          echo "桌面端：${{ needs.build-desktop.result }}"
+          echo "桌面端（含 iOS）：${{ needs.build-desktop.result }}"
           echo "Android：${{ needs.build-android.result }}"
-          echo "iOS：${{ needs.build-ios.result }}"
           if [ "${{ needs.build-desktop.result }}" != "success" ] && \
-             [ "${{ needs.build-android.result }}" != "success" ] && \
-             [ "${{ needs.build-ios.result }}" != "success" ]; then
+             [ "${{ needs.build-android.result }}" != "success" ]; then
             echo "::error::所有平台均构建失败，保留草稿以便排查"
             exit 1
           fi

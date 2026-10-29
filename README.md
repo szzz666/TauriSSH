@@ -101,7 +101,7 @@ adb shell "/data/local/tmp/android_ssh_smoke 127.0.0.1 2222 $USER /data/local/tm
 
 | 触发方式 | 版本号 | Release 类型 |
 | --- | --- | --- |
-| push 到 `main` | 最近标签递增补丁号 + `-dev.<run>`，如 `v0.1.1-dev.42` | 预发布（prerelease） |
+| push 到 `main` | 最近标签递增补丁号 + `-<run>`，如 `v0.1.1-42` | 预发布（prerelease） |
 | push `vX.Y.Z` 标签 | 标签版本，如 `v0.1.0` | 正式版 |
 | 手动触发并填写版本 | 填写的版本 | 正式版 |
 
@@ -117,6 +117,10 @@ adb shell "/data/local/tmp/android_ssh_smoke 127.0.0.1 2222 $USER /data/local/tm
 | iOS | 未签名 `.ipa`（可自签侧载） |
 
 版本号同时写入 `package.json`、`tauri.conf.json` 与 Android 的 `versionName` / `versionCode`（`versionCode` 取 run number，保证每次构建递增）。
+
+预发布标识必须是纯数字（如 `0.1.1-42`）：Windows 的 WiX/MSI 只接受数字预发布标识，写 `dev.42` 会直接构建失败。
+
+Android APK 用仓库里固定的发布密钥签名，因此**不同版本的 APK 可以互相覆盖升级**；iOS 构建与 macOS Apple Silicon 共用同一个 runner，避免额外的 macOS 排队等待。
 
 > 提交信息里带 `[skip ci]` 或只改动 Markdown / LICENSE / .gitignore 时不会触发发布。
 
